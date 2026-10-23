@@ -1,0 +1,16 @@
+{
+  "name": "yeet",
+  "version": "0.1.0",
+  "description": "Self-hosted place for agent output. Throw an HTML page with its media, get one link.",
+  "type": "module",
+  "license": "MIT",
+  "repository": { "type": "git", "url": "https://github.com/parth-thakre/yeet.git" },
+  "bugs": { "url": "https://github.com/parth-thakre/yeet/issues" },
+  "bin": { "yeet": "./cli/yeet.mjs" },
+  "scripts": {
+    "start": "node server/server.mjs",
+    "test": "node --test test/*.test.mjs"
+  },
+  "engines": { "node": ">=22" },
+  "files": ["server/", "cli/", "skills/", "deploy/Dockerfile", "deploy/compose.yaml", "deploy/cloudflare-tunnel.sh", "deploy/.env.example", "deploy/README.md", "README.md", "SECURITY.md", "CONTRIBUTING.md", "SCOPE.md", "CONTRACT.md"]
+}

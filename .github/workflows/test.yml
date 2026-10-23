@@ -1,0 +1,39 @@
+name: Tests
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        node: [22, 24]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+      - run: npm test
+  container:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -f deploy/Dockerfile -t yeet:test .
+      - name: Check container startup and first-run setup
+        shell: bash
+        run: |
+          docker run -d --name yeet-test -p 127.0.0.1:3000:3000 -e YEET_ORIGIN=http://localhost:3000 -e YEET_INSECURE_COOKIE=1 yeet:test
+          for attempt in {1..30}; do
+            if curl --fail --silent http://localhost:3000/healthz; then
+              # grep -q stops reading early; with pipefail that SIGPIPE fails the step, so read the logs first.
+              logs=$(docker logs yeet-test 2>&1)
+              grep -q 'Set up your admin account' <<<"$logs"
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs yeet-test
+          exit 1

@@ -1,0 +1,12 @@
+data/
+deploy/data/
+deploy/.env
+yeet-out/
+node_modules/
+.DS_Store
+deploy/cloudflared/*.json
+deploy/cloudflared/config.yml
+.env
+.env.*
+!.env.example
+.yeet/
