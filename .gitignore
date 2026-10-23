@@ -1,5 +1,7 @@
 data/
 deploy/data/
+deploy/data-backup*/
+deploy/data-before-restore*/
 deploy/.env
 yeet-out/
 node_modules/

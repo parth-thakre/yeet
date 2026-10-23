@@ -17,6 +17,24 @@ test('the private data bind mount is relabelled for SELinux container access', a
   assert.match(compose, /^\s+- \.\/data:\/data:Z\s*$/m);
 });
 
+test('deployment backups stay out of Git without hiding deployment source', async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'yeet-ignore-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  await exec('git', ['init', '--quiet', directory]);
+  await writeFile(path.join(directory, '.gitignore'), await readFile(new URL('../.gitignore', import.meta.url)));
+  const privateFiles = [
+    'deploy/data/members.json',
+    'deploy/data-backup/members.json',
+    'deploy/data-backup-20260101-120000/sessions.json',
+    'deploy/data-before-restore/members.json',
+    'deploy/data-before-restore-20260101-120000/sessions.json',
+  ];
+  const { stdout } = await exec('git', ['check-ignore', '--no-index', ...privateFiles], { cwd: directory });
+  assert.deepEqual(stdout.trim().split(/\r?\n/), privateFiles);
+  await assert.rejects(exec('git', ['check-ignore', '--no-index', 'deploy/README.md', 'deploy/compose.yaml',
+    'deploy/Dockerfile', 'deploy/.env.example'], { cwd: directory }), error => error.code === 1 && error.stdout === '');
+});
+
 test('the tunnel helper keeps .env private under a permissive umask', {
   skip: process.platform === 'win32' ? 'POSIX permissions only' : !(await available('jq')) && 'needs jq',
 }, async t => {
