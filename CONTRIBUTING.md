@@ -28,3 +28,34 @@ Report security problems privately; see [SECURITY.md](SECURITY.md).
   credentials or private pages in release screenshots.
 - Keep the trusted-workspace warning visible in the README. Publishing source
   does not make Yeet suitable for hostile publishers or public signup.
+
+### Fresh-deployment checks
+
+Use throwaway data and localhost HTTP with insecure cookies enabled as described
+in the README and deployment guide. Also try plain `npm start`. Do not reuse a
+live CLI connection. Before running any CLI commands, isolate its saved state and
+remove environment credentials:
+
+```sh
+export YEET_HOME=$(mktemp -d)
+unset YEET_TOKEN YEET_ORIGIN
+```
+
+`YEET_HOME` overrides the CLI's entire `~/.yeet` directory, including credentials
+and artifact mappings. Keep the same temporary directory for the trial.
+
+- Open the first-run link from the console and create an admin. Invite a second
+  member through People; redeem the invite in a separate browser profile.
+- Run `yeet login http://localhost:3000 --no-browser --device release-trial`,
+  approve its code in the admin browser, then check `yeet whoami`.
+- Throw an HTML directory with a real image and a video. Check media decoding and
+  seeking in the browser, plus a byte-range request returning 206 and the requested
+  bytes. Rethrow to create another version and check `?v=1` still opens the first.
+- Check private, workspace and public pages and their assets as the owner, the
+  other member, and a logged-out client. The other member must get 404 for private
+  pages. Public pages must open logged out; other pages must require login.
+- Test `yeet open --no-browser` both without a target and with a private-page URL
+  in a fresh browser. Each link must work once, then reject reuse.
+- Stop the server, copy its whole data directory, wipe only the throwaway data,
+  and restore the copy. Check both password logins, the saved terminal connection,
+  pages, access rules and retained versions after restart.

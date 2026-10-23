@@ -45,6 +45,12 @@ node:path, node:stream, etc.). Dev dependencies are also disallowed; tests use n
 - `YEET_TRUST_PROXY=1` trust CF-Connecting-IP / X-Forwarded-For for login limits.
   Default off. Enable only behind a trusted proxy with no direct ingress.
 
+The Compose data bind mount uses `:Z` so Docker/Podman relabels it for private
+container access on SELinux hosts. The directory must be writable by container
+UID 1000. Rootless Podman maps this UID into its user namespace; prepare ownership
+with `podman unshare chown`, not a host `chown 1000:1000`. Backups must include the
+whole data directory with writes stopped, preserving permissions and ownership.
+
 ## Storage layout (server owns this)
 
 ```
@@ -271,6 +277,8 @@ GET /a/<id>/v/N/<path...>   serve version N file
 
 Config file `~/.yeet/config.json`: `{ "origin", "token" }`. Environment `YEET_ORIGIN`
 and `YEET_TOKEN` override the file. `--origin` flag overrides both.
+`YEET_HOME` overrides the entire `~/.yeet` directory, including config, artifact
+mappings and sort logs. Use a temporary directory for isolated deployment tests.
 
 Mapping file `~/.yeet/artifacts.json`: `{ "<sourceKey>": { "id", "url", "origin" } }`.
 `sourceKey` = sha256 hex of `${os.hostname()}\0${absolute path of the thrown file or dir}`.

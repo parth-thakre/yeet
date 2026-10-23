@@ -7,7 +7,7 @@ services:
     ports:
       - "127.0.0.1:3000:3000"
     volumes:
-      - ./data:/data
+      - ./data:/data:Z
     environment:
       # Compose reads these from deploy/.env; never commit that file.
       YEET_ORIGIN: ${YEET_ORIGIN:?Set YEET_ORIGIN in .env}
