@@ -28,10 +28,20 @@ Run Yeet on an always-on machine or VPS. See the [deployment guide](deploy/READM
 for Docker, HTTPS, and backups. A fresh server prints a private setup link in its
 console. Open it and create your admin account. No bootstrap token is needed.
 
-For a quick local trial with Node 22+, set `YEET_ORIGIN=http://localhost:3000` and
-`YEET_INSECURE_COOKIE=1` in your shell, then run `npm start`. Open the setup link
-printed in the terminal. The server listens on `127.0.0.1` only, so other machines
-can't reach this trial. Set `YEET_HOST` to listen elsewhere, and use HTTPS before sharing.
+For a quick local trial with Node 22+, run this from the checkout in Bash:
+
+```sh
+yeet_trial_data=$(mktemp -d)
+printf 'Trial data: %s\n' "$yeet_trial_data"
+YEET_DATA="$yeet_trial_data" YEET_ORIGIN=http://localhost:3000 YEET_INSECURE_COOKIE=1 npm start
+```
+
+Open the setup link printed in the terminal. `YEET_DATA` keeps this trial separate
+from any existing `./data`; keep that temporary directory if you want to restart
+with the same accounts and pages. Without `YEET_DATA`, the server uses `./data`
+relative to your current directory. The server listens on `127.0.0.1` only, so
+other machines can't reach this trial. Set `YEET_HOST` to listen elsewhere, and
+use HTTPS before sharing. Stop with Ctrl+C before backing up the data directory.
 
 ## Sign in and connect a terminal
 
@@ -84,7 +94,9 @@ yeet throw ./result
 ## Invite people and manage access
 
 Admins use **People** on the website to create an invite or password-reset link.
-Send it privately. The recipient chooses a password; the link expires in 7 days
+Send it privately. Open the invite in a signed-out browser or a separate browser
+profile to test a second account; Yeet refuses to switch an already signed-in
+account through an invite. The recipient chooses a password; the link expires in 7 days
 and is consumed only when they submit it, not when a link preview opens it.
 
 Use **Terminals** to revoke a CLI connection and **Account** to change your password.

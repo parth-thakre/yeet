@@ -11,6 +11,12 @@ const script = fileURLToPath(new URL('../deploy/cloudflare-tunnel.sh', import.me
 const exec = promisify(execFile);
 const available = async command => exec('bash', ['-c', `command -v ${command}`]).then(() => true, () => false);
 
+test('the private data bind mount is relabelled for SELinux container access', async () => {
+  const compose = await readFile(new URL('../deploy/compose.yaml', import.meta.url), 'utf8');
+  // Without :Z, an enforcing SELinux host denies writes even with the correct UID.
+  assert.match(compose, /^\s+- \.\/data:\/data:Z\s*$/m);
+});
+
 test('the tunnel helper keeps .env private under a permissive umask', {
   skip: process.platform === 'win32' ? 'POSIX permissions only' : !(await available('jq')) && 'needs jq',
 }, async t => {

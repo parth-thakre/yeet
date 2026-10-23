@@ -15,8 +15,13 @@ test('the npm package includes security docs but no local deployment state', {
 }, async t => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'yeet-package-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
+  // Do not read deploy/ wholesale: a working checkout may have private data,
+  // backups or credentials there, owned by a rootless container's mapped UID.
   for (const name of ['package.json', 'README.md', 'LICENSE', 'SECURITY.md',
-    'CONTRIBUTING.md', 'SCOPE.md', 'CONTRACT.md', 'server', 'cli', 'skills', 'deploy']) {
+    'CONTRIBUTING.md', 'SCOPE.md', 'CONTRACT.md', 'server', 'cli', 'skills',
+    'deploy/Dockerfile', 'deploy/compose.yaml', 'deploy/cloudflare-tunnel.sh',
+    'deploy/.env.example', 'deploy/README.md']) {
+    await mkdir(path.dirname(path.join(directory, name)), { recursive: true });
     await cp(path.join(root, name), path.join(directory, name), { recursive: true });
   }
   // A deployment can contain these even when the source checkout is clean.

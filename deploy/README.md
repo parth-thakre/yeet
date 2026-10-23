@@ -2,9 +2,14 @@
 
 Run one Yeet server on an always-on machine or VPS. It stores the workspace's
 files and identities. Phones, laptops, and agents connect to its HTTPS URL.
-Only the server needs Docker. CLI machines need Node 22+ and the Yeet checkout.
+Only the server needs Docker or Podman with a Compose provider. CLI machines need
+Node 22+ and the Yeet checkout.
 
 Examples below run from `deploy/` and use Bash unless stated otherwise.
+For Podman, replace `docker compose` with `podman compose` throughout this guide.
+Install a Compose provider first. If Podman uses the Docker-compatible Compose
+provider, start its API socket with `systemctl --user start podman.socket` on a
+systemd host. A missing `podman.sock` means that socket is not running.
 
 ## First run
 
@@ -29,12 +34,28 @@ chmod 700 data
 ```
 
 On Docker Desktop, create `deploy/data` and allow Docker access to it.
+For rootless Podman on Linux, use this instead of the Linux commands above:
+
+```sh
+mkdir -p data
+podman unshare chown 1000:1000 data
+podman unshare chmod 700 data
+```
+
+Do not use host `sudo chown 1000:1000` for rootless Podman. The container's UID
+1000 maps to a different host UID. Compose mounts `./data` with `:Z` for a private
+SELinux label; without it, enforcing hosts report `EACCES` even with correct
+ownership. Keep this data directory exclusive to this Yeet service.
+
 Then start the server:
 
 ```sh
 docker compose up -d --build --wait
 docker compose logs yeet
 ```
+
+If your Compose provider does not support `--wait`, omit it and wait for
+`curl --fail http://localhost:3000/healthz` to succeed before opening the setup link.
 
 The log contains **Set up your admin account** followed by a private link. Open
 that link, choose an admin username and password of at least 12 characters, and
@@ -55,6 +76,8 @@ configuration, browser, and CLI; account forms refuse mismatched origins.
 In the website, open **People**, enter a username, and send the invite privately.
 They open it, choose a password, and can sign in on any browser from then on.
 Opening the invite alone does not consume it; submitting a password does.
+For a second-account trial, use a signed-out browser or a separate browser
+profile. An invite cannot silently replace an account already signed in there.
 
 On each machine that publishes, run `npm link` from the checkout once, then:
 
@@ -193,12 +216,44 @@ From `deploy/`:
 
 ```sh
 docker compose stop yeet
-cp -a ./data ./data-backup-$(date +%Y%m%d-%H%M%S)
+sudo cp -a ./data ./data-backup-$(date +%Y%m%d-%H%M%S)
 docker compose start yeet
 ```
 
 Use a new backup path each time and move a protected copy off the host.
-To restore, stop Yeet, preserve the existing data elsewhere, copy the backup to `deploy/data`, restore UID 1000 write access on Linux, and start Yeet.
+With rootless Podman, run the copy inside its user namespace so it can read
+private files and preserve their container ownership:
+
+```sh
+podman compose stop yeet
+podman unshare cp -a ./data ./data-backup-$(date +%Y%m%d-%H%M%S)
+podman compose start yeet
+```
+
+To restore, stop Yeet, preserve the existing data elsewhere, then copy the backup
+to `deploy/data`. Do not copy onto an existing `data` directory: that can nest the
+backup inside it or mix old and restored state. For example, after choosing an
+existing backup and a new preservation path:
+
+```sh
+docker compose stop yeet
+sudo mv ./data ./data-before-restore
+sudo cp -a ./data-backup-YYYYMMDD-HHMMSS ./data
+sudo chown -R 1000:1000 ./data
+docker compose up -d --wait
+```
+
+For rootless Podman, use `podman compose` for stop/start and `podman unshare` before
+`mv`, `cp -a`, and `chown -R` instead of `sudo`. `up -d` applies the SELinux mount
+label to the restored directory. On Docker Desktop, preserve permissions with
+`cp -a`, omit `sudo`, and omit the Linux `chown`. For a plain Node deployment, stop `npm start`
+and use the actual `YEET_DATA` path instead of `deploy/data`; keep ownership with
+the OS account running Node.
+
+After restarting, sign in as both accounts, open the pages, and check an older
+version with `?v=1`. A restored terminal credential should still pass `yeet whoami`.
+Backups contain password hashes and session credentials. Protect them like the
+live data directory.
 Do not delete `members.json` to reset a token; that changes who can bootstrap as admin.
 
 ## Upgrade and logs
