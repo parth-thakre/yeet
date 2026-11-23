@@ -58,8 +58,10 @@ let result = {};
 // other-account.net belongs to a different Cloudflare account from the tunnel.
 const zones = { 'example.com': 'account', 'example.co.uk': 'account', 'example-content.net': 'account', 'other-account.net': 'other' };
 if (url.includes('/zones?')) {
-  const name = new URL(url).searchParams.get('name');
-  result = zones[name] ? [{ id: 'zone-' + name, account: { id: zones[name] } }] : [];
+  const query = new URL(url).searchParams, name = query.get('name'), owner = query.get('account.id');
+  // FAKE_ZONE_WITHOUT_ACCOUNT leaves the owner out of zone objects, as a restricted token might see them.
+  result = zones[name] && (!owner || owner === zones[name])
+    ? [{ id: 'zone-' + name, ...(process.env.FAKE_ZONE_WITHOUT_ACCOUNT ? {} : { account: { id: zones[name] } }) }] : [];
 }
 else if (url.includes('/cfd_tunnel?')) result = [{ id: 'tunnel' }];
 else if (url.endsWith('/token')) result = Buffer.from(JSON.stringify({ a: 'account', t: 'tunnel', s: 'not-a-secret' })).toString('base64');
@@ -71,8 +73,10 @@ console.log(JSON.stringify({ success: true, result }));
   const work = path.join(directory, 'deploy');
   await exec('mkdir', [work]);
   await writeFile(path.join(work, '.env'), existingEnv, { mode: 0o600 });
+  // Cloudflare settings from the developer's shell must not leak into the fake API run.
+  const { CF_ACCOUNT_ID, CF_API_TOKEN_FILE, CF_DNS_API_TOKEN, CONTENT_HOSTNAME, ZONE_NAME, CONTENT_ZONE_NAME, ...inherited } = process.env;
   const run = exec('bash', ['-c', 'umask 022; exec bash "$1"', 'tunnel', script], {
-    cwd: work, env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, CF_API_TOKEN: 'not-a-secret', HOSTNAME: 'yeet.example.com', ...env },
+    cwd: work, env: { ...inherited, PATH: `${bin}:${process.env.PATH}`, CF_API_TOKEN: 'not-a-secret', HOSTNAME: 'yeet.example.com', ...env },
   });
   const error = fails ? await run.then(() => assert.fail('the tunnel helper should have failed'), error => error) : (await run, null);
   const created = (await readFile(records, 'utf8').catch(() => '')).trim().split('\n').filter(Boolean)
@@ -139,6 +143,15 @@ test('the tunnel helper refuses a CF_ACCOUNT_ID that differs from the zone accou
   assert.deepEqual(created, []);
   assert.deepEqual(docker, []);
   assert.equal(await readFile(path.join(work, '.env'), 'utf8'), 'YEET_ORIGIN=https://old.example\n');
+});
+
+test('the tunnel helper checks CF_ACCOUNT_ID against the zone even when the zone omits its account', posixWithJq, async t => {
+  const refused = await runTunnelHelper(t, { CF_ACCOUNT_ID: 'other', FAKE_ZONE_WITHOUT_ACCOUNT: '1' }, '', { fails: true });
+  assert.match(refused.error.stderr, /zone example\.com is not in Cloudflare account other/);
+  assert.deepEqual(refused.created, []);
+  assert.deepEqual(refused.docker, []);
+  const accepted = await runTunnelHelper(t, { CF_ACCOUNT_ID: 'account', FAKE_ZONE_WITHOUT_ACCOUNT: '1' }, '');
+  assert.deepEqual(accepted.created, ['yeet.example.com', 'yeet-content.example.com']);
 });
 
 test('the tunnel helper refuses a content zone in another Cloudflare account before changing anything', posixWithJq, async t => {

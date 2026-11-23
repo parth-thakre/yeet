@@ -72,6 +72,11 @@ acct="${CF_ACCOUNT_ID:-$(jq -r '.result[0].account.id // empty' <<<"$zone_json")
 # A tunnel can only serve hostnames from zones in its own account, so an override must agree.
 zone_acct="$(jq -r '.result[0].account.id // empty' <<<"$zone_json")"
 [ -z "$zone_acct" ] || [ "$zone_acct" = "$acct" ] || fail "zone $ZONE_NAME is in Cloudflare account $zone_acct, but CF_ACCOUNT_ID is $acct; the tunnel must be in the zone's account"
+if [ -z "$zone_acct" ]; then
+  # The zone didn't name its account, so ask for it within the chosen account instead.
+  owned="$(cfdns "$api/zones?name=$ZONE_NAME&account.id=$acct" | jq -r '.result[0].id // empty')"
+  [ "$owned" = "$zone" ] || fail "zone $ZONE_NAME is not in Cloudflare account $acct; the tunnel must be in the zone's account"
+fi
 
 # Check a content hostname in another zone before changing anything. Its CNAME can only route
 # through this tunnel when that zone is in the tunnel's Cloudflare account.
