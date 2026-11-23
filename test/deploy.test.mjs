@@ -74,7 +74,7 @@ console.log(JSON.stringify({ success: true, result }));
   await exec('mkdir', [work]);
   await writeFile(path.join(work, '.env'), existingEnv, { mode: 0o600 });
   // Cloudflare settings from the developer's shell must not leak into the fake API run.
-  const { CF_ACCOUNT_ID, CF_API_TOKEN_FILE, CF_DNS_API_TOKEN, CONTENT_HOSTNAME, ZONE_NAME, CONTENT_ZONE_NAME, ...inherited } = process.env;
+  const { CF_ACCOUNT_ID, CF_API_TOKEN_FILE, CF_DNS_API_TOKEN, CONTENT_HOSTNAME, ZONE_NAME, CONTENT_ZONE_NAME, ENV_FILE, TUNNEL_NAME, ...inherited } = process.env;
   const run = exec('bash', ['-c', 'umask 022; exec bash "$1"', 'tunnel', script], {
     cwd: work, env: { ...inherited, PATH: `${bin}:${process.env.PATH}`, CF_API_TOKEN: 'not-a-secret', HOSTNAME: 'yeet.example.com', ...env },
   });
