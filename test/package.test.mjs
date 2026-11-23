@@ -37,7 +37,9 @@ test('the npm package includes security docs but no local deployment state', {
   const { stdout } = await exec(process.execPath, [process.env.npm_execpath,
     'pack', '--dry-run', '--json', '--ignore-scripts', '--offline', '--no-audit',
     '--no-fund', '--update-notifier=false'], { cwd: directory, timeout: 90_000 });
-  const [manifest] = JSON.parse(stdout);
+  // npm 11 prints an array of manifests; npm 12 an object keyed by package name.
+  const packs = JSON.parse(stdout);
+  const manifest = Array.isArray(packs) ? packs[0] : Object.values(packs)[0];
   const packed = new Set(manifest.files.map(file => file.path));
   for (const name of localFiles) assert.equal(packed.has(name), false, `${name} must stay local`);
   for (const name of ['LICENSE', 'README.md', 'SECURITY.md', 'CONTRIBUTING.md',

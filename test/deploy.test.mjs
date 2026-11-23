@@ -17,6 +17,11 @@ test('the private data bind mount is relabelled for SELinux container access', a
   assert.match(compose, /^\s+- \.\/data:\/data:Z\s*$/m);
 });
 
+test('Compose passes the content origin from .env to the server', async () => {
+  const compose = await readFile(new URL('../deploy/compose.yaml', import.meta.url), 'utf8');
+  assert.match(compose, /^\s+YEET_CONTENT_ORIGIN: \$\{YEET_CONTENT_ORIGIN:-\}\s*$/m);
+});
+
 test('deployment backups stay out of Git without hiding deployment source', async t => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'yeet-ignore-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
@@ -35,32 +40,63 @@ test('deployment backups stay out of Git without hiding deployment source', asyn
     'deploy/Dockerfile', 'deploy/.env.example'], { cwd: directory }), error => error.code === 1 && error.stdout === '');
 });
 
-test('the tunnel helper keeps .env private under a permissive umask', {
-  skip: process.platform === 'win32' ? 'POSIX permissions only' : !(await available('jq')) && 'needs jq',
-}, async t => {
+// Runs cloudflare-tunnel.sh against a fake Cloudflare API and a no-op docker. Returns the work
+// directory and the DNS records the script created.
+async function runTunnelHelper(t, env, existingEnv) {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'yeet-tunnel-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
-  // Fake curl answers the Cloudflare API calls the script makes; fake docker does nothing.
   const bin = path.join(directory, 'bin');
+  const records = path.join(directory, 'records.log');
   await exec('mkdir', [bin]);
   await writeFile(path.join(bin, 'curl'), `#!/usr/bin/env node
-const url = process.argv.findLast(arg => arg.startsWith('https://api.cloudflare.com'));
+const fs = require('node:fs');
+const args = process.argv.slice(2);
+const url = args.findLast(arg => arg.startsWith('https://api.cloudflare.com'));
 let result = {};
 if (url.includes('/zones?')) result = [{ id: 'zone', account: { id: 'account' } }];
 else if (url.includes('/cfd_tunnel?')) result = [{ id: 'tunnel' }];
 else if (url.endsWith('/token')) result = Buffer.from(JSON.stringify({ a: 'account', t: 'tunnel', s: 'not-a-secret' })).toString('base64');
 else if (url.includes('/dns_records?')) result = [];
+else if (url.endsWith('/dns_records')) fs.appendFileSync(${JSON.stringify(records)}, args[args.indexOf('--data') + 1] + '\\n');
 console.log(JSON.stringify({ success: true, result }));
 `, { mode: 0o755 });
   await writeFile(path.join(bin, 'docker'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
   const work = path.join(directory, 'deploy');
   await exec('mkdir', [work]);
-  await writeFile(path.join(work, '.env'), 'YEET_ADMIN_TOKEN=keep-this-private\nYEET_ORIGIN=https://old.example\n', { mode: 0o600 });
+  await writeFile(path.join(work, '.env'), existingEnv, { mode: 0o600 });
   await exec('bash', ['-c', 'umask 022; exec bash "$1"', 'tunnel', script], {
-    cwd: work, env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, CF_API_TOKEN: 'not-a-secret', HOSTNAME: 'yeet.example.com' },
+    cwd: work, env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, CF_API_TOKEN: 'not-a-secret', HOSTNAME: 'yeet.example.com', ...env },
   });
+  const created = (await readFile(records, 'utf8').catch(() => '')).trim().split('\n').filter(Boolean)
+    .map(line => JSON.parse(line).name);
+  return { work, created };
+}
+
+const posixWithJq = {
+  skip: process.platform === 'win32' ? 'POSIX permissions only' : !(await available('jq')) && 'needs jq',
+};
+
+test('the tunnel helper keeps .env private under a permissive umask', posixWithJq, async t => {
+  const { work, created } = await runTunnelHelper(t, {},
+    'YEET_ADMIN_TOKEN=keep-this-private\nYEET_ORIGIN=https://old.example\nYEET_CONTENT_ORIGIN=https://old-content.example\n');
   assert.equal((await stat(path.join(work, '.env'))).mode & 0o777, 0o600);
-  assert.equal(await readFile(path.join(work, '.env'), 'utf8'), `YEET_ADMIN_TOKEN=keep-this-private\nYEET_ORIGIN=https://yeet.example.com\nCLOUDFLARED_UID=${process.getuid()}\n`);
+  assert.equal(await readFile(path.join(work, '.env'), 'utf8'), 'YEET_ADMIN_TOKEN=keep-this-private\n'
+    + 'YEET_ORIGIN=https://yeet.example.com\nYEET_CONTENT_ORIGIN=https://yeet-content.example.com\n'
+    + `CLOUDFLARED_UID=${process.getuid()}\n`);
   for (const file of ['config.yml', 'tunnel.json']) assert.equal((await stat(path.join(work, 'cloudflared', file))).mode & 0o077, 0, file);
   assert.deepEqual((await exec('ls', ['-A', work])).stdout.trim().split('\n').sort(), ['.env', 'cloudflared'], 'no temporary file is left behind');
+  // Both hostnames reach the same Yeet port, and the content one comes before the catch-all.
+  assert.deepEqual(created, ['yeet.example.com', 'yeet-content.example.com']);
+  const config = await readFile(path.join(work, 'cloudflared', 'config.yml'), 'utf8');
+  assert.ok(config.endsWith(['ingress:', '  - hostname: yeet.example.com', '    service: http://yeet:3000',
+    '  - hostname: yeet-content.example.com', '    service: http://yeet:3000', '  - service: http_status:404', ''].join('\n')), config);
+});
+
+test('the tunnel helper can skip the content hostname', posixWithJq, async t => {
+  const { work, created } = await runTunnelHelper(t, { CONTENT_HOSTNAME: 'none' },
+    'YEET_ORIGIN=https://old.example\nYEET_CONTENT_ORIGIN=https://old-content.example\n');
+  assert.equal(await readFile(path.join(work, '.env'), 'utf8'),
+    `YEET_ORIGIN=https://yeet.example.com\nCLOUDFLARED_UID=${process.getuid()}\n`);
+  assert.deepEqual(created, ['yeet.example.com']);
+  assert.doesNotMatch(await readFile(path.join(work, 'cloudflared', 'config.yml'), 'utf8'), /content/);
 });

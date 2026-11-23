@@ -18,12 +18,18 @@ an existing configuration. Use your final HTTPS origin:
 
 ```dotenv
 YEET_ORIGIN=https://yeet.example.com
+YEET_CONTENT_ORIGIN=https://yeet-content.example.com
 YEET_INSECURE_COOKIE=0
 YEET_TRUST_PROXY=0
 ```
 
-For a trial on this machine only, use `http://localhost:3000` and
-`YEET_INSECURE_COOKIE=1`. Never use insecure cookies over a public network.
+`YEET_CONTENT_ORIGIN` is a second hostname that serves published pages, so their
+scripts never run with account access. It needs its own DNS name and route; see
+[Second hostname for published pages](#second-hostname-for-published-pages).
+
+For a trial on this machine only, use `YEET_ORIGIN=http://localhost:3000`,
+`YEET_CONTENT_ORIGIN=http://127.0.0.1:3000`, and `YEET_INSECURE_COOKIE=1`.
+Never use insecure cookies over a public network.
 
 Prepare the persistent data directory. On Linux:
 
@@ -70,6 +76,8 @@ after setup. All data and backups must remain private.
 The host port is loopback-only. Configure a tunnel or reverse proxy below before
 opening links on another device. Use the same origin consistently in the server
 configuration, browser, and CLI; account forms refuse mismatched origins.
+Links and the CLI always use `YEET_ORIGIN`. Browsers reach the content origin
+through redirects from it.
 
 ## Invite people and connect terminals
 
@@ -142,6 +150,26 @@ Compose publishes it on the host's loopback.
 Terminate TLS at the tunnel or proxy. Do not disable Yeet authentication or log login URL query strings.
 All visibility checks still apply over the public network.
 
+### Second hostname for published pages
+
+Yeet serves published pages from `YEET_CONTENT_ORIGIN`, a second hostname with no
+account access. Both hostnames point at the same Yeet port. Yeet picks the account
+site or the content site from the `Host` header, so the tunnel or proxy must pass
+`Host` through unchanged. Cloudflare Tunnel and Caddy do this by default.
+
+1. Pick the hostname. A separate registrable domain, such as `yeet-content.net` next
+   to `yeet.example.com`, is best where you can get one. A sibling subdomain such as
+   `yeet-content.example.com` also works.
+2. Add a DNS record for it the same way as for `YEET_ORIGIN`.
+3. Route it in your tunnel or proxy to the same `yeet:3000` or `127.0.0.1:3000`
+   service as the main hostname. The Cloudflare and Caddy examples below include it.
+4. Set `YEET_CONTENT_ORIGIN=https://<that hostname>` in `.env` and run `docker compose up -d`.
+
+Yeet refuses to start if the content hostname matches the `YEET_ORIGIN` hostname.
+Without `YEET_CONTENT_ORIGIN`, published pages run on the account origin and the
+server prints a warning at startup. Any member can then act as anyone who opens
+their page.
+
 ### Cloudflare Tunnel
 
 This is the recommended way to make `public` links work from anywhere without opening a port.
@@ -153,6 +181,7 @@ The connector runs as the `cloudflared` service in `compose.yaml` (profile `clou
 ```sh
 cloudflared tunnel create yeet                    # writes ~/.cloudflared/<id>.json
 cloudflared tunnel route dns yeet yeet.example.com
+cloudflared tunnel route dns yeet yeet-content.example.com
 ```
 
 Copy `<id>.json` into `deploy/cloudflared/` on the server and write `deploy/cloudflared/config.yml`:
@@ -163,11 +192,13 @@ credentials-file: /etc/cloudflared/<id>.json
 ingress:
   - hostname: yeet.example.com
     service: http://yeet:3000
+  - hostname: yeet-content.example.com
+    service: http://yeet:3000
   - service: http_status:404
 ```
 
 **With an API token** that has Account > Cloudflare Tunnel > Edit and Zone > DNS > Edit, `cloudflare-tunnel.sh`
-does all of the above for you, including the DNS record.
+does all of the above for you, including both DNS records.
 
 With that token supplied through `CF_API_TOKEN` or `CF_API_TOKEN_FILE`, run from `deploy/`:
 
@@ -175,8 +206,14 @@ With that token supplied through `CF_API_TOKEN` or `CF_API_TOKEN_FILE`, run from
 HOSTNAME=yeet.example.com bash cloudflare-tunnel.sh
 ```
 
-Then set `YEET_ORIGIN=https://yeet.example.com` and `CLOUDFLARED_UID=$(id -u)` in `.env` (the connector runs as
-that uid so it can read the 600-mode credentials file), and start everything with:
+The content hostname defaults to the first label of `HOSTNAME` plus `-content`, here
+`yeet-content.example.com`. Cloudflare's free certificate covers it because it is one level
+below the zone. Set `CONTENT_HOSTNAME` to choose another name, including one in a second zone
+the token can edit. `CONTENT_HOSTNAME=none` skips it.
+
+The script writes `YEET_ORIGIN`, `YEET_CONTENT_ORIGIN`, and `CLOUDFLARED_UID=$(id -u)` to `.env`
+(the connector runs as that uid so it can read the 600-mode credentials file). Check them, then
+start everything with:
 
 ```sh
 docker compose --profile cloudflare up -d --build
@@ -196,18 +233,24 @@ Notes when fronted by Cloudflare:
 `tailscale serve --bg http://localhost:3000` exposes Yeet only to your tailnet over HTTPS.
 Use `tailscale funnel --bg http://localhost:3000` instead when public links must work outside the tailnet; Funnel must be enabled for the node.
 Set `YEET_ORIGIN` to the HTTPS URL the command reports. Serve alone cannot satisfy off-tailnet public sharing.
+Tailscale gives the node one hostname, so it can't provide `YEET_CONTENT_ORIGIN` on its own. Without a second
+hostname, published pages run on the account origin.
 
 ### Caddy
 
-Point your domain at the host and allow inbound ports 80 and 443. Run Caddy on the host with:
+Point both hostnames at the host and allow inbound ports 80 and 443. Run Caddy on the host with:
 
 ```caddyfile
-yeet.example {
+yeet.example.com {
+    reverse_proxy 127.0.0.1:3000
+}
+
+yeet-content.example.com {
     reverse_proxy 127.0.0.1:3000
 }
 ```
 
-Caddy obtains the TLS certificate. If you run Caddy in a container, join the Compose network and proxy to `yeet:3000` instead of its own loopback address.
+Caddy obtains a TLS certificate for each hostname and passes `Host` through. If you run Caddy in a container, join the Compose network and proxy to `yeet:3000` instead of its own loopback address.
 
 ## Backup and restore
 
@@ -271,3 +314,9 @@ docker compose logs -f --tail=100 yeet
 If you enabled the optional connector, update it with `docker compose pull cloudflared` before `docker compose up -d`.
 Logs go to container stdout and stderr. Use `docker compose ps` for health and `docker compose logs yeet` for startup or request errors.
 Do not put access tokens or credential-bearing login URLs in logs or bug reports.
+
+When upgrading from a release without `YEET_CONTENT_ORIGIN`, set up the
+[second hostname](#second-hostname-for-published-pages) first. With the tunnel helper, rerun
+`cloudflare-tunnel.sh` with the same `HOSTNAME`. Stable links keep working because they still
+point at `YEET_ORIGIN`. Behind HTTPS the browser session cookie is now named `__Host-yeet_session`,
+so every browser signs in again once after the upgrade. CLI device tokens are unaffected.

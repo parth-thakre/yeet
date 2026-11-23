@@ -115,7 +115,7 @@ For a table, use `<div class="table-scroll" role="region" aria-label="Verificati
 Preview the finished page at a phone width. Check the page itself does not scroll sideways, every asset loads, and the video plays and seeks.
 
 For shared styling, replace the style block with `<link rel="stylesheet" href="/css/yeet-v1.css">`.
-That URL resolves on the Yeet origin after upload; use that origin when previewing the linked stylesheet locally.
+After upload that path resolves on the Yeet origin and on its content origin, which serves published pages. Use the Yeet origin when previewing the linked stylesheet locally.
 Linked CSS gives pages consistent styling without repeating it. Inline CSS travels with a downloaded page and does not depend on the Yeet origin.
 Recommend inline CSS for anything meant to last. The versioned `yeet-v1.css` is frozen once shipped; visual changes need a new versioned filename.
 

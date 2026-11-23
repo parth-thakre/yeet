@@ -25,15 +25,21 @@ jobs:
       - name: Check container startup and first-run setup
         shell: bash
         run: |
-          docker run -d --name yeet-test -p 127.0.0.1:3000:3000 -e YEET_ORIGIN=http://localhost:3000 -e YEET_INSECURE_COOKIE=1 yeet:test
+          # Two hostnames on one port: localhost is the account origin, 127.0.0.1 the content origin.
+          docker run -d --name yeet-test -p 127.0.0.1:3000:3000 -e YEET_ORIGIN=http://localhost:3000 -e YEET_CONTENT_ORIGIN=http://127.0.0.1:3000 -e YEET_INSECURE_COOKIE=1 yeet:test
+          ready=
           for attempt in {1..30}; do
-            if curl --fail --silent http://localhost:3000/healthz; then
-              # grep -q stops reading early; with pipefail that SIGPIPE fails the step, so read the logs first.
-              logs=$(docker logs yeet-test 2>&1)
-              grep -q 'Set up your admin account' <<<"$logs"
-              exit 0
-            fi
+            if curl --fail --silent http://localhost:3000/healthz; then ready=1; break; fi
             sleep 1
           done
-          docker logs yeet-test
-          exit 1
+          # grep -q stops reading early; with pipefail that SIGPIPE fails the step, so read the logs first.
+          logs=$(docker logs yeet-test 2>&1)
+          if [ -z "$ready" ]; then printf '%s\n' "$logs"; exit 1; fi
+          trap 'printf "%s\n" "$logs"' ERR
+          grep -q 'Set up your admin account' <<<"$logs"
+          # The content host serves its own routes and none of the account routes.
+          curl --fail --silent http://127.0.0.1:3000/healthz
+          curl --fail --silent --output /dev/null http://127.0.0.1:3000/css/yeet-v1.css
+          status() { curl --silent --output /dev/null --write-out '%{http_code}' "$1"; }
+          test "$(status http://127.0.0.1:3000/api/me)" = 404
+          test "$(status http://localhost:3000/api/me)" = 401

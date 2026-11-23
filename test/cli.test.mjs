@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createServer as createNetServer } from 'node:net';
-import { createServer } from 'node:http';
+import { createServer, get as httpGet } from 'node:http';
 import { once } from 'node:events';
 import { mkdtemp, mkdir, readdir, readFile, writeFile, rm, symlink } from 'node:fs/promises';
 import path from 'node:path';
@@ -59,14 +59,14 @@ async function stop(child) {
   child.kill();
   await closed;
 }
-async function startServer(t, directory) {
+async function startServer(t, directory, extra = {}) {
   const port = await freePort();
   const origin = `http://127.0.0.1:${port}`;
   let output = '';
   const child = spawn(process.execPath, [serverEntry], {
     cwd: root, stdio: ['ignore', 'pipe', 'pipe'], env: {
       ...process.env, YEET_DATA: path.join(directory, 'data'), YEET_PORT: String(port),
-      YEET_ADMIN_TOKEN: adminToken, YEET_INSECURE_COOKIE: '1', YEET_ORIGIN: origin,
+      YEET_ADMIN_TOKEN: adminToken, YEET_INSECURE_COOKIE: '1', YEET_ORIGIN: origin, ...extra,
     },
   });
   child.stdout.on('data', chunk => { output += chunk; });
@@ -470,6 +470,50 @@ test('CLI against the real server', { timeout: 120_000 }, async t => {
     const accepted = await run(home, ['whoami', '--origin', origin], { env: { YEET_ORIGIN: 'http://127.0.0.1:1', YEET_TOKEN: adminToken } });
     assert.equal(JSON.parse(success(accepted)).name, 'admin');
   });
+});
+
+test('links copied from the content origin work, and nothing is sent there', { timeout: 60_000 }, async t => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), 'yeet-cli-content-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  // The content origin is a listener that records anything sent to it; the CLI must never call it.
+  const seen = [];
+  const capture = createServer((req, res) => { seen.push(`${req.method} ${req.url} ${req.headers.authorization || ''}`); res.writeHead(500); res.end(); });
+  capture.listen(0, '127.0.0.1');
+  await once(capture, 'listening');
+  t.after(() => new Promise(resolve => capture.close(resolve)));
+  const content = `http://localhost:${capture.address().port}`;
+  const origin = await startServer(t, directory, { YEET_CONTENT_ORIGIN: content });
+  assert.deepEqual(await (await fetch(`${origin}/api/server`)).json(), { contentOrigin: content });
+  const home = path.join(directory, 'home');
+  success(await run(home, ['login', '--origin', origin, '--token-stdin'], { stdin: `${adminToken}\n` }));
+  const pages = path.join(directory, 'page');
+  await mkdir(pages);
+  await writeFile(path.join(pages, 'index.html'), '<p>one</p>');
+  const { id } = JSON.parse(success(await run(home, ['throw', pages, '--workspace', '--json'])));
+  await writeFile(path.join(pages, 'index.html'), '<p>two</p>');
+  success(await run(home, ['throw', pages]));
+  for (const [i, link] of [`${content}/a/${id}/v/1/`, `${content}/a/${id}/?v=1`, `${content}/a/${id}/v/1/index.html`].entries()) {
+    const output = path.join(directory, `pin-${i}`);
+    success(await run(home, ['call', link, '--output', output]));
+    assert.equal(await readFile(path.join(output, 'index.html'), 'utf8'), '<p>one</p>', link);
+  }
+  assert.equal(JSON.parse(success(await run(home, ['info', `${content}/a/${id}/`]))).id, id);
+  assert.match(success(await run(home, ['visibility', `${content}/a/${id}/`, 'public'])), new RegExp(`^${origin}/a/${id}\\s+public$`));
+  const anonymous = path.join(directory, 'anonymous');
+  success(await run(path.join(directory, 'anonymous-home'), ['call', `${content}/a/${id}/`, '--origin', origin, '--output', anonymous]));
+  assert.equal(await readFile(path.join(anonymous, 'index.html'), 'utf8'), '<p>two</p>', 'a tokenless call reads the link too');
+  // yeet open signs the browser in on the account origin and lands on the same page there.
+  const link = success(await run(home, ['open', '--no-browser', `${content}/a/${id}/v/1/`]));
+  assert.ok(link.startsWith(`${origin}/login/link?code=`), link);
+  // Node's fetch sets its own Sec-Fetch-* headers, so act as a direct browser navigation with http.get.
+  const landed = await new Promise((resolve, reject) => httpGet(link, { headers: { 'Sec-Fetch-Site': 'none', 'Sec-Fetch-Mode': 'navigate' } }, response => { response.resume(); resolve(response); }).on('error', reject));
+  assert.equal(landed.headers.location, `/a/${id}/v/1/`);
+  const foreign = await run(home, ['info', `http://elsewhere.test:9/a/${id}/`]);
+  assert.equal(foreign.code, 1);
+  assert.match(foreign.stderr, /artifact is on http:\/\/elsewhere\.test:9/);
+  const foreignOpen = await run(home, ['open', '--no-browser', `${content.replace('localhost', '127.0.0.2')}/a/${id}/`]);
+  assert.equal(foreignOpen.code, 1);
+  assert.deepEqual(seen, [], 'the content origin was never contacted');
 });
 
 test('usage, version, missing authentication, and input validation', async t => {

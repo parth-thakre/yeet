@@ -15,6 +15,8 @@ export async function api(req, res, pathname, query, member, auth, artifacts) {
   if (pathname === '/api/me' && method === 'GET') {
     required(member); json(res, 200, { name: member.name, role: member.role }); return true;
   }
+  // Not secret: lets the CLI read page links copied from the content origin's address bar.
+  if (pathname === '/api/server' && method === 'GET') { json(res, 200, { contentOrigin: auth.contentOrigin() }); return true; }
   // Device-code login: no auth on these two; the poll code is itself a secret.
   if (pathname === '/api/device' && method === 'POST') {
     const client = auth.client(req);

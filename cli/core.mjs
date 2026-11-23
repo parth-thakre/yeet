@@ -120,6 +120,19 @@ export async function configuration(flags, needsToken = true) {
   return { origin: normalizeOrigin(origin), token };
 }
 
+// After the redirect, browsers show pages on the server's content origin. Such a link is read as the
+// same path on the configured origin. Only the configured origin is asked, and without the token.
+export async function accountLink(value, config) {
+  if (typeof value !== 'string' || !/^https?:\/\//i.test(value)) return value;
+  const linked = normalizeOriginLoose(value);
+  if (!linked || linked === config.origin) return value;
+  let advertised = null;
+  try { advertised = (await apiClient({ origin: config.origin })('/api/server'))?.contentOrigin; } catch { /* older servers have no content origin */ }
+  if (typeof advertised !== 'string' || normalizeOriginLoose(advertised) !== linked) return value; // artifactRef explains the mismatch
+  const url = new URL(value);
+  return `${config.origin}${url.pathname}${url.search}${url.hash}`;
+}
+
 // A copied link may pin a version as /a/<id>/v/<n>/ or /a/<id>/?v=<n>; n is null when it does not.
 // Like the server, ?v counts only on the page root, and a /v/<n>/ path wins over it.
 export function artifactRef(value, origin) {

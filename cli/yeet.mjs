@@ -6,7 +6,7 @@ import os from 'node:os';
 import { createHash } from 'node:crypto';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { YeetError, usage, parseArgs, validateArgs, home, readJson, writeJson,
-  configuration, apiClient, artifactId, artifactRef, versionNumber } from './core.mjs';
+  configuration, apiClient, accountLink, artifactId, artifactRef, versionNumber } from './core.mjs';
 import { collectFiles } from './files.mjs';
 import { extractTar } from './tar.mjs';
 import { openBrowser } from './browser.mjs';
@@ -85,7 +85,7 @@ async function open(flags, args) {
   if (flags.qr && flags['no-browser']) throw new YeetError('choose --qr or --no-browser, not both', 1);
   const config = await configuration(flags);
   const api = apiClient(config);
-  const next = openPath(args[0], config.origin);
+  const next = openPath(await accountLink(args[0], config), config.origin);
   async function link() {
     let result;
     try { result = await api('/api/browser-links', { method: 'POST', json: { next } }); }
@@ -141,7 +141,7 @@ async function throwArtifact(flags, args) {
   const mappingFile = path.join(home(), 'artifacts.json');
   const mapping = await readJson(mappingFile);
   let artifact;
-  if (flags.artifact) artifact = await api(`/api/artifacts/${artifactId(flags.artifact, config.origin)}`);
+  if (flags.artifact) artifact = await api(`/api/artifacts/${artifactId(await accountLink(flags.artifact, config), config.origin)}`);
   else if (!flags.new) {
     const saved = mapping[sourceKey];
     if (saved?.origin === config.origin) {
@@ -275,7 +275,7 @@ async function main(argv) {
   if (command === 'project') {
     validateArgs(flags, args, [], 2);
     const config = await configuration(flags);
-    const id = artifactId(args[0], config.origin);
+    const id = artifactId(await accountLink(args[0], config), config.origin);
     const result = await apiClient(config)(`/api/artifacts/${id}`, { method: 'PATCH', json: { project: projectName(args[1]) } });
     console.log(`${result.url}  ${result.project}`);
     return;
@@ -336,7 +336,7 @@ async function main(argv) {
     validateArgs(flags, args, [], 1);
     const config = await configuration(flags);
     const api = apiClient(config);
-    const id = artifactId(args[0], config.origin);
+    const id = artifactId(await accountLink(args[0], config), config.origin);
     const { pending } = await api(`/api/artifacts/${id}`);
     if (pending === undefined) throw new YeetError('this server does not report pending uploads, or the page is not yours; update the Yeet server', 3);
     if (!pending) { console.error('No pending upload on this page.'); return; }
@@ -349,7 +349,7 @@ async function main(argv) {
     if (command === 'visibility' && !visibilities.includes(args[1])) throw new YeetError('visibility must be private, workspace, or public', 1);
     const config = await configuration(flags, command === 'visibility');
     const api = apiClient(config);
-    const { id, n: pinned } = artifactRef(args[0], config.origin);
+    const { id, n: pinned } = artifactRef(await accountLink(args[0], config), config.origin);
     if (command === 'info') return printJson(await api(`/api/artifacts/${id}`));
     if (command === 'visibility') {
       const result = await api(`/api/artifacts/${id}`, { method: 'PATCH', json: { visibility: args[1] } });
