@@ -159,7 +159,10 @@ site or the content site from the `Host` header, so the tunnel or proxy must pas
 It must also pass the browser's `Sec-Fetch-*` and `Origin` headers through unchanged.
 Without `Sec-Fetch-*`, private pages ask for an extra click before they open. Without
 `Origin`, that extra click and the sign-out confirmation are refused, so stripping both
-leaves private pages unopenable in a browser.
+leaves private pages unopenable in a browser. Browsers don't send `Sec-Fetch-*` to
+plain-HTTP origins other than localhost or a loopback address, so such a deployment
+behaves like a proxy that strips them: private pages and the Log out link ask for an
+extra click.
 
 1. Pick the hostname. A separate registrable domain, such as `yeet-content.net` next
    to `yeet.example.com`, is best where you can get one. A sibling subdomain such as
@@ -216,8 +219,9 @@ HOSTNAME=yeet.example.com bash cloudflare-tunnel.sh
 
 The content hostname defaults to the first label of `HOSTNAME` plus `-content`, here
 `yeet-content.example.com`. Cloudflare's free certificate covers it because it is one level
-below the zone. Set `CONTENT_HOSTNAME` to choose another name, including one in a second zone
-the token can edit; a separate registrable domain is stronger than the sibling default.
+below the zone. Set `CONTENT_HOSTNAME` to choose another name. It can be in a second zone if that zone is in
+the same Cloudflare account as the tunnel and the token can edit it. A separate registrable
+domain is stronger than the sibling default. The script lowercases both hostnames.
 `CONTENT_HOSTNAME=none` skips it.
 
 The script writes `YEET_ORIGIN`, `YEET_CONTENT_ORIGIN`, and `CLOUDFLARED_UID=$(id -u)` to `.env`

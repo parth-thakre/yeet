@@ -513,6 +513,14 @@ test('links copied from the content origin work, and nothing is sent there', { t
   assert.match(foreign.stderr, /artifact is on http:\/\/elsewhere\.test:9/);
   const foreignOpen = await run(home, ['open', '--no-browser', `${content.replace('localhost', '127.0.0.2')}/a/${id}/`]);
   assert.equal(foreignOpen.code, 1);
+  // Only page paths move to the account origin; a content-origin /logout must not become the account's.
+  for (const path of ['/logout', '/', `/a/${id}x/`, '/api/me']) {
+    const opened = await run(home, ['open', '--no-browser', `${content}${path}`]);
+    assert.equal(opened.code, 1, path);
+    assert.match(opened.stderr, new RegExp(`that link is on ${content}`), path);
+    assert.equal(opened.stdout, '', path);
+  }
+  assert.match((await run(home, ['info', `${content}/logout`])).stderr, new RegExp(`artifact is on ${content}`));
   assert.deepEqual(seen, [], 'the content origin was never contacted');
 });
 

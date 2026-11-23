@@ -588,6 +588,27 @@ test('published pages are served from a separate content origin', async t => {
     assert.equal((await onContent(pending.headers.location.slice(content.length))).status, 403, 'an unspent grant dies with the member');
   });
 
+  await t.test('setting a first password ends the browser\'s old session and its page cookies', async () => {
+    await api('/api/members', { method: 'POST', headers: bearer(adminToken), body: { name: 'carol' }, expected: 201 });
+    const carolToken = (await api('/api/members/carol/tokens', { method: 'POST', headers: bearer(adminToken), body: { device: 'laptop' }, expected: 201 })).token;
+    const page = await publish(local, carolToken, 'private');
+    const before = await login(carolToken); // token-only: no password yet
+    const { cookie } = await contentCookie(before, page);
+    assert.equal((await onContent(`/a/${page}/`, { headers: { Cookie: cookie } })).status, 200);
+    const saved = await account('/account', { method: 'POST', body: new URLSearchParams({ password: 'a long test password' }).toString(),
+      headers: { Cookie: before, Origin: origin, 'Content-Type': 'application/x-www-form-urlencoded' } });
+    assert.equal(saved.status, 200, saved.body);
+    const after = saved.headers['set-cookie'][0].split(';')[0];
+    const stale = await onContent(`/a/${page}/`, { headers: { Cookie: cookie } });
+    assert.equal(stale.status, 302, 'the page cookie of the replaced session is refused');
+    assert.equal(stale.headers.location, `${origin}/a/${page}/`);
+    await api('/api/me', { headers: { Cookie: before }, expected: 401 });
+    assert.equal((await api('/api/me', { headers: { Cookie: after } })).name, 'carol');
+    assert.equal((await api('/api/me', { headers: bearer(carolToken) })).name, 'carol', 'terminals keep working after a first password');
+    const fresh = (await contentCookie(after, page)).cookie;
+    assert.equal((await onContent(`/a/${page}/`, { headers: { Cookie: fresh } })).status, 200);
+  });
+
   await t.test('a password reset ends the page cookies of the old session', async () => {
     const { inviteUrl } = await api('/api/members', { method: 'POST', headers: bearer(adminToken), body: { name: 'bob' }, expected: 201 });
     const join = async url => {

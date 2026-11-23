@@ -175,7 +175,7 @@ export async function authStore(config) {
     for (const token of stored.tokens) if (token.member === member.name) token.revokedAt ||= now();
     stored.invites = stored.invites.filter(i => i.member !== member.name);
   }
-  async function changePassword(member, currentPassword, password) {
+  async function changePassword(member, currentPassword, password, req) {
     return lock('auth', async () => {
       const stored = await load();
       const current = activeMember(stored, member.name);
@@ -185,6 +185,9 @@ export async function authStore(config) {
       // Adding a password to a legacy account preserves its existing connections.
       if (member.passwordHash) invalidate(stored, current);
       await writeJSON(membersFile, stored);
+      // The new cookie replaces this browser's session, so end the old one and the page cookies tied to it.
+      const previous = req && cookieValue(req);
+      if (previous) await pruneSessions(s => s.cookieHash !== hash(previous));
       return sessionFor(current);
     });
   }

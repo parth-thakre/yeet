@@ -89,7 +89,7 @@ export async function accounts(req, res, pathname, query, member, auth, view) {
     try {
       if (post) {
         accountGuard(req, auth); auth.attempt(req);
-        res.setHeader('Set-Cookie', await auth.changePassword(member, input.get('current'), input.get('password')));
+        res.setHeader('Set-Cookie', await auth.changePassword(member, input.get('current'), input.get('password'), req));
         render('Password saved', '<p>You can now sign in on any browser with your username and password.</p><p><a href="/connect">Connect a terminal</a></p>'); return true;
       }
     } catch (error) { if (!error.status) throw error; render('Account', content, error); return true; }

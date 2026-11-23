@@ -41,10 +41,12 @@ node:path, node:stream, etc.). Dev dependencies are also disallowed; tests use n
   Validated like `YEET_ORIGIN`: http or https, no path or credentials, trailing slashes
   trimmed. Startup fails when any of these hold:
   - `YEET_ORIGIN` is unset.
-  - Its hostname equals the `YEET_ORIGIN` hostname (this includes equal origins).
-  - `YEET_ORIGIN` is https and it is not.
-  - Its hostname isn't letters, digits, dots and hyphens (an IPv6 literal or an
-    underscore), which CSP `form-action` can't name.
+  - The content origin's hostname equals the `YEET_ORIGIN` hostname (this includes
+    equal origins).
+  - `YEET_ORIGIN` is https and the content origin is not.
+  - The content origin's hostname isn't letters, digits, dots and hyphens (an IPv6
+    literal or an underscore), which CSP `form-action` can't name.
+
   Unset (Compose passes an empty value) keeps the legacy single-origin mode, where
   artifacts are served on `YEET_ORIGIN` as before, and prints a startup warning that
   published scripts share the account origin. A separate registrable domain is
@@ -60,7 +62,10 @@ node:path, node:stream, etc.). Dev dependencies are also disallowed; tests use n
   Optional and ignored afterwards. Without it, create pending setup state and print
   a private `/setup?code=` link. First successful setup creates the admin account.
 - `YEET_INSECURE_COOKIE=1` drop the Secure cookie flag for local http dev. This also
-  names the session cookie `yeet_session` instead of `__Host-yeet_session`.
+  names the session cookie `yeet_session` instead of `__Host-yeet_session`. Browsers
+  don't send `Sec-Fetch-*` to plain-HTTP origins other than localhost or a loopback
+  address, so such a deployment behaves like a proxy that strips them: private pages
+  and the Log out link ask for an extra click.
 - `YEET_TRUST_PROXY=1` trust CF-Connecting-IP / X-Forwarded-For for login limits.
   Default off. Enable only behind a trusted proxy with no direct ingress.
 
@@ -303,7 +308,8 @@ With `YEET_CONTENT_ORIGIN` set, `GET /a/<id>[/...]` on the account origin works 
   readability checks and returns 303 to the grant for the canonical target (or, for a
   public artifact, to the content origin). A Bearer `POST` without a
   matching `Origin` gets 403. With one, a token that verifies gets 404, and a token that
-  doesn't is handled like a browser request (401 on a non-public artifact).
+  doesn't verify gets 401 on a non-public artifact (the session cookie is ignored when
+  `Authorization` is present) and a 303 to the content origin on a public one.
 - Workspace or private artifact, subresource request (`Sec-Fetch-Mode` present and not
   `navigate`, or `Sec-Fetch-Dest` present and not `document`, such as an `<img>`,
   `<script>`, or `fetch` from another page): 404. No page can plant another page's

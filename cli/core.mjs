@@ -129,7 +129,11 @@ export async function accountLink(value, config) {
   let advertised = null;
   try { advertised = (await apiClient({ origin: config.origin })('/api/server'))?.contentOrigin; } catch { /* older servers have no content origin */ }
   if (typeof advertised !== 'string' || normalizeOriginLoose(advertised) !== linked) return value; // artifactRef explains the mismatch
+  // Only page paths move over; anything else on the content origin (say /logout) keeps the mismatch error.
   const url = new URL(value);
+  let pathname;
+  try { pathname = decodeURIComponent(url.pathname); } catch { return value; }
+  if (!/^\/a\/[A-Za-z0-9_-]{12}(?:\/|$)/.test(pathname)) return value;
   return `${config.origin}${url.pathname}${url.search}${url.hash}`;
 }
 

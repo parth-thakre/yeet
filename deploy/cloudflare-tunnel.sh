@@ -10,8 +10,8 @@
 #
 # CONTENT_HOSTNAME defaults to the first label of HOSTNAME plus -content on the same parent
 # (yeet.example.com -> yeet-content.example.com), which Universal SSL covers. A hostname in
-# another zone also works if the DNS token can edit that zone. CONTENT_HOSTNAME=none skips it,
-# and published pages then share the account origin.
+# another zone also works if that zone is in the tunnel's Cloudflare account and the DNS token
+# can edit it. CONTENT_HOSTNAME=none skips it, and published pages then share the account origin.
 #
 # Usage (from deploy/):  HOSTNAME=yeet.example.com bash cloudflare-tunnel.sh
 set -euo pipefail
@@ -21,6 +21,12 @@ umask 077
 HOSTNAME="${HOSTNAME:?set HOSTNAME, e.g. yeet.example.com}"
 # Bash fills HOSTNAME with the machine name when it isn't passed in, so insist on a DNS name.
 case "$HOSTNAME" in *.*) ;; *) echo "error: set HOSTNAME to the full public hostname, e.g. HOSTNAME=yeet.example.com" >&2; exit 1 ;; esac
+# Yeet only accepts lowercase origins, so normalize every name before it reaches DNS or .env.
+lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
+HOSTNAME="$(lower "$HOSTNAME")"
+CONTENT_HOSTNAME="$(lower "${CONTENT_HOSTNAME:-}")"
+ZONE_NAME="$(lower "${ZONE_NAME:-}")"
+CONTENT_ZONE_NAME="$(lower "${CONTENT_ZONE_NAME:-}")"
 TUNNEL_NAME="${TUNNEL_NAME:-yeet}"
 ENV_FILE="${ENV_FILE:-.env}"
 ZONE_NAME="${ZONE_NAME:-$(echo "$HOSTNAME" | awk -F. '{print $(NF-1)"."$NF}')}"
@@ -64,6 +70,17 @@ zone="$(jq -r '.result[0].id // empty' <<<"$zone_json")"
 acct="${CF_ACCOUNT_ID:-$(jq -r '.result[0].account.id // empty' <<<"$zone_json")}"
 [ -n "$acct" ] || fail "could not determine the account id; set CF_ACCOUNT_ID"
 
+# Check a content hostname in another zone before changing anything. Its CNAME can only route
+# through this tunnel when that zone is in the tunnel's Cloudflare account.
+content_zone="$zone"
+if [ -n "$CONTENT_HOSTNAME" ] && [ "$CONTENT_ZONE_NAME" != "$ZONE_NAME" ]; then
+  content_zone_json="$(cfdns "$api/zones?name=$CONTENT_ZONE_NAME")"
+  content_zone="$(jq -r '.result[0].id // empty' <<<"$content_zone_json")"
+  [ -n "$content_zone" ] || fail "zone $CONTENT_ZONE_NAME not visible to this token (needs Zone > DNS > Edit on it)"
+  content_acct="$(jq -r '.result[0].account.id // empty' <<<"$content_zone_json")"
+  [ "$content_acct" = "$acct" ] || fail "zone $CONTENT_ZONE_NAME must be in the same Cloudflare account as the tunnel ($acct)"
+fi
+
 tid="$(cf "$api/accounts/$acct/cfd_tunnel?name=$TUNNEL_NAME&is_deleted=false" | jq -r '.result[0].id // empty')"
 if [ -z "$tid" ]; then
   body="$(jq -cn --arg n "$TUNNEL_NAME" '{name:$n, config_src:"local"}')"
@@ -86,11 +103,6 @@ route_dns "$zone" "$HOSTNAME"
 
 content_ingress=
 if [ -n "$CONTENT_HOSTNAME" ]; then
-  content_zone="$zone"
-  if [ "$CONTENT_ZONE_NAME" != "$ZONE_NAME" ]; then
-    content_zone="$(cfdns "$api/zones?name=$CONTENT_ZONE_NAME" | jq -r '.result[0].id // empty')"
-    [ -n "$content_zone" ] || fail "zone $CONTENT_ZONE_NAME not visible to this token (needs Zone > DNS > Edit on it)"
-  fi
   route_dns "$content_zone" "$CONTENT_HOSTNAME"
   # Same service: cloudflared keeps the Host header, and Yeet routes on it.
   content_ingress="  - hostname: $CONTENT_HOSTNAME
