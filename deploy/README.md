@@ -158,8 +158,8 @@ site or the content site from the `Host` header, so the tunnel or proxy must pas
 `Host` through unchanged. Cloudflare Tunnel and Caddy do this by default.
 It must also pass the browser's `Sec-Fetch-*` and `Origin` headers through unchanged.
 Without `Sec-Fetch-*`, private pages ask for an extra click before they open. Without
-`Origin`, that click and the sign-out confirmation are refused, so private pages can't
-be opened in a browser.
+`Origin`, that extra click and the sign-out confirmation are refused, so stripping both
+leaves private pages unopenable in a browser.
 
 1. Pick the hostname. A separate registrable domain, such as `yeet-content.net` next
    to `yeet.example.com`, is best where you can get one. A sibling subdomain such as

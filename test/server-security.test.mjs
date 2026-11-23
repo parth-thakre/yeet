@@ -209,7 +209,8 @@ test('startup validates YEET_CONTENT_ORIGIN and keeps one private signing key', 
     [{ YEET_ORIGIN: 'https://yeet.example', YEET_CONTENT_ORIGIN: 'ftp://content.example' }, /YEET_CONTENT_ORIGIN must be an HTTP\(S\) origin/],
     [{ YEET_ORIGIN: 'https://yeet.example', YEET_CONTENT_ORIGIN: 'not a url' }, /YEET_CONTENT_ORIGIN must be an HTTP\(S\) origin/],
     [{ YEET_ORIGIN: 'https://yeet.example', YEET_CONTENT_ORIGIN: 'http://content.example' }, /must use https when YEET_ORIGIN does/],
-    [{ YEET_ORIGIN: 'http://localhost:3000', YEET_CONTENT_ORIGIN: 'http://[::1]:3000' }, /not an IPv6 literal/],
+    [{ YEET_ORIGIN: 'http://localhost:3000', YEET_CONTENT_ORIGIN: 'http://[::1]:3000' }, /letters, digits, dots and hyphens/],
+    [{ YEET_ORIGIN: 'http://localhost:3000', YEET_CONTENT_ORIGIN: 'http://pages_internal.localhost:3000' }, /letters, digits, dots and hyphens/],
   ];
   for (const [extra, message] of refused) await assert.rejects(createYeet(env(extra)), message, JSON.stringify(extra));
   // Compose passes an empty string when the variable is unset: that is legacy mode, not an error.

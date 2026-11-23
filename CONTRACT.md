@@ -39,13 +39,17 @@ node:path, node:stream, etc.). Dev dependencies are also disallowed; tests use n
 - `YEET_ORIGIN` public origin, e.g. `https://yeet.example`, used to print links
 - `YEET_CONTENT_ORIGIN` origin that serves artifact bytes, e.g. `https://yeet-content.example`.
   Validated like `YEET_ORIGIN`: http or https, no path or credentials, trailing slashes
-  trimmed. Startup fails if it is set while `YEET_ORIGIN` is unset, if it equals
-  `YEET_ORIGIN`, if its hostname equals the `YEET_ORIGIN` hostname, or if `YEET_ORIGIN` is
-  https and it is not, or if its host is an IPv6 literal (CSP `form-action` can't name
-  one). Unset (Compose passes an empty value) keeps the legacy single-origin mode, where artifacts are served
-  on `YEET_ORIGIN` as before, and prints a startup warning that published scripts share
-  the account origin. A separate registrable domain is preferred. A sibling subdomain works,
-  but browsers treat it as the same site as `YEET_ORIGIN`.
+  trimmed. Startup fails when any of these hold:
+  - `YEET_ORIGIN` is unset.
+  - Its hostname equals the `YEET_ORIGIN` hostname (this includes equal origins).
+  - `YEET_ORIGIN` is https and it is not.
+  - Its hostname isn't letters, digits, dots and hyphens (an IPv6 literal or an
+    underscore), which CSP `form-action` can't name.
+  Unset (Compose passes an empty value) keeps the legacy single-origin mode, where
+  artifacts are served on `YEET_ORIGIN` as before, and prints a startup warning that
+  published scripts share the account origin. A separate registrable domain is
+  preferred. A sibling subdomain works, but browsers treat it as the same site as
+  `YEET_ORIGIN`.
   One listener serves both origins. A request whose `Host` header matches the content
   origin's `URL.host` (`host[:port]`, case-insensitive) goes to the content router; every
   other request goes to the account router. `X-Forwarded-Host` is never consulted, so a
@@ -297,8 +301,9 @@ With `YEET_CONTENT_ORIGIN` set, `GET /a/<id>[/...]` on the account origin works 
   through the redirects. `POST /a/<id>/...` requires the same-origin guard used by
   account forms and an `Origin` header equal to `YEET_ORIGIN`, then runs the same
   readability checks and returns 303 to the grant for the canonical target (or, for a
-  public artifact, to the content origin). A Bearer `POST` is refused
-  (403 without a matching `Origin`, otherwise 404).
+  public artifact, to the content origin). A Bearer `POST` without a
+  matching `Origin` gets 403. With one, a token that verifies gets 404, and a token that
+  doesn't is handled like a browser request (401 on a non-public artifact).
 - Workspace or private artifact, subresource request (`Sec-Fetch-Mode` present and not
   `navigate`, or `Sec-Fetch-Dest` present and not `document`, such as an `<img>`,
   `<script>`, or `fetch` from another page): 404. No page can plant another page's
