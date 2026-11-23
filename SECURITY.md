@@ -8,9 +8,30 @@ you deployed it, and the steps that reproduce the problem.
 
 ## What Yeet assumes
 
-- One server is one small, trusted workspace. Members can publish HTML with scripts,
-  and those pages run on the Yeet origin. Don't invite people you wouldn't trust to
-  publish pages your other members open.
+- One server is one small, trusted workspace. Yeet is an early release.
+- Members can publish HTML with scripts. With `YEET_CONTENT_ORIGIN` set, those pages
+  run on a separate origin. Their scripts can't reach account pages, the API, or the
+  viewer's session.
+- Without `YEET_CONTENT_ORIGIN`, pages run on the same origin as account pages, and
+  any member can act as anyone who opens their page. Don't run that way with
+  publishers you don't trust.
+- Every published page shares the one content origin. A hostile page can read
+  browser storage, such as `localStorage`, that any published page saved.
+- Background requests and prefetches can't start the handoff that opens a private
+  page on the content origin. But any click or keypress on a hostile page lets it
+  open another page the viewer can read, because a script navigation in the few
+  seconds after a user action counts as user-started. For the next 12 hours, other
+  published pages can then load that page's files.
+- Only a separate origin per page would fully isolate pages from each other, and
+  Yeet doesn't support that.
+- Browsers treat a sibling subdomain, such as `yeet-content.example.com` next to
+  `yeet.example.com`, as the same site. Account cookies then go along with requests
+  from published pages, and Yeet relies on its own checks to refuse them. A separate
+  registrable domain, such as `yeet-content.net`, also gets the browser's site
+  boundary and is stronger.
+- The content policy blocks scripts in published pages from using `fetch`, submitting
+  forms, or loading frames. It allows images and media from any https URL, so a
+  hostile script can still send what it reads to another site in a URL.
 - The server runs behind HTTPS (a tunnel or a reverse proxy). `YEET_INSECURE_COOKIE=1`
   is for local trials only.
 - `YEET_TRUST_PROXY=1` is set only when every request arrives through that proxy.

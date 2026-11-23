@@ -79,24 +79,34 @@ export async function authStore(config) {
     return member ? { entry, member } : null;
   }
   async function tokenMember(token) { return (await tokenEntry(token))?.member || null; }
-  const cookieValue = req => /(?:^|;\s*)yeet_session=([^;]+)/.exec(req.headers.cookie || '')?.[1] || null;
+  // __Host- keeps a sibling subdomain (such as the content origin) from tossing a session cookie in.
+  // The prefix requires Secure, so plain-HTTP trials keep the old name.
+  const sessionName = config.insecureCookie ? 'yeet_session' : '__Host-yeet_session';
+  const sessionPattern = new RegExp(`(?:^|;\\s*)${sessionName}=([^;]+)`);
+  const cookieValue = req => sessionPattern.exec(req.headers.cookie || '')?.[1] || null;
+  // A session is live while unexpired, its member is active and unchanged, and any terminal it came from is connected.
+  async function live(session) {
+    if (!session || Date.parse(session.expiresAt) <= Date.now()) return null;
+    const stored = await load();
+    const member = activeMember(stored, session.member);
+    // A session opened through a terminal lives only as long as that terminal's token.
+    if (session.tokenId && !stored.tokens.some(t => t.id === session.tokenId && !t.revokedAt)) return null;
+    return member && (session.authVersion || 0) === (member.authVersion || 0) ? { session, member } : null;
+  }
+  async function current(req) {
+    const value = cookieValue(req);
+    return value ? live((await readJSON(sessionsFile)).sessions.find(s => s.cookieHash === hash(value))) : null;
+  }
+  async function session(id) { return live((await readJSON(sessionsFile)).sessions.find(s => s.id === id)); }
   async function identify(req) {
     if (req.headers.authorization !== undefined) {
       const match = /^Bearer ([^\s]+)$/i.exec(req.headers.authorization);
       return match ? tokenMember(match[1]) : null;
     }
-    const value = cookieValue(req);
-    if (!value) return null;
-    const session = (await readJSON(sessionsFile)).sessions.find(s => s.cookieHash === hash(value) && Date.parse(s.expiresAt) > Date.now());
-    if (!session) return null;
-    const stored = await load();
-    const member = activeMember(stored, session.member);
-    // A session opened through a terminal lives only as long as that terminal's token.
-    if (session.tokenId && !stored.tokens.some(t => t.id === session.tokenId && !t.revokedAt)) return null;
-    return member && (session.authVersion || 0) === (member.authVersion || 0) ? member : null;
+    return (await current(req))?.member || null;
   }
   function cookie(value, age = sessionLife) {
-    return `yeet_session=${value}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${age}${config.insecureCookie ? '' : '; Secure'}`;
+    return `${sessionName}=${value}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${age}${config.insecureCookie ? '' : '; Secure'}`;
   }
   async function pruneSessions(keep) {
     return lock('sessions', async () => {
@@ -165,7 +175,7 @@ export async function authStore(config) {
     for (const token of stored.tokens) if (token.member === member.name) token.revokedAt ||= now();
     stored.invites = stored.invites.filter(i => i.member !== member.name);
   }
-  async function changePassword(member, currentPassword, password) {
+  async function changePassword(member, currentPassword, password, req) {
     return lock('auth', async () => {
       const stored = await load();
       const current = activeMember(stored, member.name);
@@ -175,6 +185,9 @@ export async function authStore(config) {
       // Adding a password to a legacy account preserves its existing connections.
       if (member.passwordHash) invalidate(stored, current);
       await writeJSON(membersFile, stored);
+      // The new cookie replaces this browser's session, so end the old one and the page cookies tied to it.
+      const previous = req && cookieValue(req);
+      if (previous) await pruneSessions(s => s.cookieHash !== hash(previous));
       return sessionFor(current);
     });
   }
@@ -382,9 +395,9 @@ export async function authStore(config) {
     });
   }
 
-  return { identify, login, logout, cookie, sessionFor, create, invite, join, inviteInfo, revoke, list, tokens, revokeToken, mintTokenFor, beginDevice, deviceRequest, approveDevice, denyDevice, pollDevice,
+  return { identify, current, session, login, logout, cookie, sessionFor, create, invite, join, inviteInfo, revoke, list, tokens, revokeToken, mintTokenFor, beginDevice, deviceRequest, approveDevice, denyDevice, pollDevice,
     beginBrowserLink, browserLinkInfo, useBrowserLink,
-    attempt, client, passwordLogin, setup, setupAvailable, changePassword, origin: () => config.origin };
+    attempt, client, passwordLogin, setup, setupAvailable, changePassword, origin: () => config.origin, contentOrigin: () => config.contentOrigin || null };
 }
 export function required(member) { if (!member) fail(401, 'Authentication required'); return member; }
 export function admin(member) { required(member); if (member.role !== 'admin') fail(403, 'Admin required'); }
@@ -402,4 +415,10 @@ function sameOrigin(req) {
 }
 export function csrfGuard(req, origin) {
   if (!sameOrigin(req) || (req.headers.origin !== undefined && req.headers.origin !== origin)) fail(403, 'Cross-site request refused');
+}
+// For browser-only form posts: browsers always send Origin on them, so its absence (a proxy that strips
+// Fetch Metadata and Origin, say) is refused rather than trusted.
+export function formGuard(req, origin) {
+  csrfGuard(req, origin);
+  if (req.headers.origin !== origin) fail(403, 'Cross-site request refused');
 }

@@ -266,7 +266,7 @@ test('HTTP server contract', { timeout: 60000 }, async t => {
     assert.equal(new URL(response.headers.get('location'), base).pathname, '/');
     const cookie = response.headers.get('set-cookie').split(';')[0];
     await status(await request('/', { token: null, headers: { Cookie: cookie } }), 200);
-    const logout = await request('/logout', { token: null, headers: { Cookie: cookie } });
+    const logout = await request('/logout', { token: null, headers: { Cookie: cookie, 'Sec-Fetch-Site': 'same-origin' } });
     assert.ok([200, 302].includes(logout.status));
     assert.match(logout.headers.get('set-cookie'), /Max-Age=0|Expires=Thu, 01 Jan 1970/i);
   });
@@ -346,7 +346,7 @@ test('HTTP server contract', { timeout: 60000 }, async t => {
     await json('/api/me', { token: null, headers: { Cookie: cookie }, expected: 401 });
     await status(await request(`/a/${id}/`, { token: null, headers: { Cookie: cookie } }), 302);
     await status(await request(`/a/${publicId}/`, { token: null }), 200);
-    const logout = await request('/logout', { token: null, headers: { Cookie: cookie } });
+    const logout = await request('/logout', { token: null, method: 'POST', headers: { Cookie: cookie, Origin: origin } });
     assert.ok([200, 302].includes(logout.status));
     assert.match(logout.headers.get('set-cookie'), /^yeet_session=/);
   });

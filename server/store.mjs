@@ -75,4 +75,4 @@ export function json(res, status, value) {
   res.writeHead(status, { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(text) });
   res.end(text);
 }
-export function redirect(res, location) { res.writeHead(302, { Location: location }); res.end(); }
+export function redirect(res, location, status = 302) { res.writeHead(status, { Location: location }); res.end(); }

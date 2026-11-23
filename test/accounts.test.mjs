@@ -152,7 +152,11 @@ test('legacy installations set a password without losing artifacts, tokens, or i
   const created = await app.api('/api/artifacts', oldCookie, { name: 'Preserve me' });
   const changed = await app.post('/account', { password }, oldCookie);
   assert.equal(changed.status, 200);
-  assert.equal((await app.get('/api/me', oldCookie)).status, 200);
+  // The browser moves to the new session cookie; the one it replaced ends, terminals do not.
+  const newCookie = changed.headers.get('set-cookie').split(';')[0];
+  assert.equal((await app.get('/api/me', oldCookie)).status, 401);
+  assert.equal((await app.get('/api/me', newCookie)).status, 200);
+  assert.equal((await app.get(`/api/artifacts/${created.id}`, newCookie)).status, 200);
   assert.equal((await fetch(`${app.origin}/api/me`, { headers: { Authorization: 'Bearer legacy-test-token' } })).status, 200);
   const cookie = await app.login('admin');
   assert.equal((await app.get(`/api/artifacts/${created.id}`, cookie)).status, 200);

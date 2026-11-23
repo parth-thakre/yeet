@@ -6,10 +6,22 @@ GIFs, and video, then share one link. Yeet serves your files without transformin
 One server is one workspace. People sign in with a username and password.
 Terminals connect once and remember the server. There is no public signup.
 
-Yeet is an early release for small, trusted workspaces. Members can publish scripts
-on the same origin as account pages. Don't host untrusted publishers or invite
-people you wouldn't trust to publish pages other members open. There are no
-per-member storage quotas. See [the security policy](SECURITY.md) before deployment.
+Yeet is an early release for small, trusted workspaces. Members can publish pages
+with scripts. Set `YEET_CONTENT_ORIGIN` to a second hostname and Yeet serves those
+pages from there, where their scripts can't reach account pages, the API, or the
+viewer's session. Without `YEET_CONTENT_ORIGIN`, pages run on the same origin as
+account pages, and any member can act as anyone who opens their page.
+
+Some limits remain. Every published page shares the one content origin. A hostile
+page can read browser storage any other page saved there. Background requests
+and prefetches can't open another private page. But any click or keypress on a
+hostile page lets it open another page the viewer can read, and for the next 12
+hours other pages can load that page's files. Only a separate origin per page
+would fully isolate pages, and Yeet doesn't support that. The content policy
+blocks `fetch` and similar calls, but a script can still send what it reads to
+another site in an image URL. There are no
+per-member storage quotas. Don't host untrusted publishers. See
+[the security policy](SECURITY.md) before deployment.
 
 Get the source and install the CLI with Node 22 or newer:
 
@@ -33,9 +45,11 @@ For a quick local trial with Node 22+, run this from the checkout in Bash:
 ```sh
 yeet_trial_data=$(mktemp -d)
 printf 'Trial data: %s\n' "$yeet_trial_data"
-YEET_DATA="$yeet_trial_data" YEET_ORIGIN=http://localhost:3000 YEET_INSECURE_COOKIE=1 npm start
+YEET_DATA="$yeet_trial_data" YEET_ORIGIN=http://localhost:3000 YEET_CONTENT_ORIGIN=http://127.0.0.1:3000 YEET_INSECURE_COOKIE=1 npm start
 ```
 
+`localhost` and `127.0.0.1` are different hostnames, so one server gives you both
+origins. Account pages open on `localhost` and published pages on `127.0.0.1`.
 Open the setup link printed in the terminal. `YEET_DATA` keeps this trial separate
 from any existing `./data`; keep that temporary directory if you want to restart
 with the same accounts and pages. Without `YEET_DATA`, the server uses `./data`

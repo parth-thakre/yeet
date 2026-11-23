@@ -54,6 +54,9 @@ and artifact mappings. Keep the same temporary directory for the trial.
 - Check private, workspace and public pages and their assets as the owner, the
   other member, and a logged-out client. The other member must get 404 for private
   pages. Public pages must open logged out; other pages must require login.
+- Check that a page link redirects to the content origin and the page loads there.
+  `/login` on the content origin must return 404. After signing out, reloading a
+  private page on the content origin must send you back to sign in.
 - Test `yeet open --no-browser` both without a target and with a private-page URL
   in a fresh browser. Each link must work once, then reject reuse.
 - Stop the server, copy its whole data directory, wipe only the throwaway data,

@@ -11,6 +11,9 @@ services:
     environment:
       # Compose reads these from deploy/.env; never commit that file.
       YEET_ORIGIN: ${YEET_ORIGIN:?Set YEET_ORIGIN in .env}
+      # Second hostname for published pages, routed to this same port. Empty keeps
+      # pages on YEET_ORIGIN, where their scripts share the account origin.
+      YEET_CONTENT_ORIGIN: ${YEET_CONTENT_ORIGIN:-}
       # Optional legacy bootstrap. Fresh installs use the private setup link in logs.
       YEET_ADMIN_TOKEN: ${YEET_ADMIN_TOKEN:-}
       # Set to 1 only for local HTTP testing. Leave at 0 behind HTTPS.

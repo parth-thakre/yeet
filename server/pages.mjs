@@ -1,17 +1,23 @@
 import { body, fail, redirect } from './store.mjs';
-import { csrfGuard, normalizeCode } from './auth.mjs';
+import { csrfGuard, formGuard, normalizeCode } from './auth.mjs';
 import { accounts } from './accounts.mjs';
 
 const escape = value => String(value).replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
 const style = `:root{color-scheme:light dark;--paper:#ffffff;--ink:#1b1f23;--muted:#56616b;--link:#164e9d;--rule:#d7dce0;font:17px/1.6 system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}@media(prefers-color-scheme:dark){:root{--paper:#0f1419;--ink:#e6e9ec;--muted:#bcc5ce;--link:#9dc5ff;--rule:#3b4650}}*{box-sizing:border-box}body{margin:0;padding:1.25rem;max-width:70ch;margin-inline:auto;background:var(--paper);color:var(--ink)}h1{font-size:1.9rem;line-height:1.2}h2{font-size:1.3rem;line-height:1.3;margin:2rem 0 0}h2+p{margin:.25rem 0 0}h2 .detail{font-weight:normal}a{color:var(--link)}header{display:flex;align-items:baseline;justify-content:space-between;gap:1rem;flex-wrap:wrap}nav{display:flex;flex-wrap:wrap;gap:.25rem 1rem;margin-block:1rem}nav a{display:inline-block;white-space:nowrap}ul{list-style:none;padding:0}li{padding:1rem 0;border-bottom:1px solid var(--rule)}li a{font-size:1.15rem;overflow-wrap:anywhere}p{margin:.4rem 0 1rem}.detail{font-size:.9rem;color:var(--muted);overflow-wrap:anywhere}label{display:block}input,button{font:inherit;padding:.65rem;margin:.5rem 0 1rem;max-width:100%;color:var(--ink);background:var(--paper);border:1px solid var(--muted);border-radius:.3rem}input{width:100%}button{cursor:pointer;margin-right:.5rem}button.small{padding:.35rem .6rem;margin:.25rem 0 0;font-size:.9rem}.code{font:1.6rem/1.2 ui-monospace,monospace;letter-spacing:.08em}a:focus-visible,input:focus-visible,button:focus-visible{outline:3px solid var(--link);outline-offset:3px}`;
-function page(res, title, content, status = 200) {
+export function page(res, title, content, status = 200) {
   const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escape(title)} | Yeet</title><style>${style}pre{overflow-x:auto;padding:1rem;background:var(--rule);border-radius:.3rem}p a{overflow-wrap:anywhere}details{margin-block:1.5rem}summary{cursor:pointer}.error{border-left:3px solid currentColor;padding:.75rem}form{max-width:28rem}input[type=hidden]{display:none}</style></head><body><main>${content}</main></body></html>`;
-  res.setHeader('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'");
+  res.setHeader('Content-Security-Policy', `default-src 'none'; style-src 'unsafe-inline'; form-action ${res.formTargets || "'self'"}; base-uri 'none'; frame-ancestors 'none'`);
   // no-referrer makes Chromium send Origin: null on HTML form posts. Send only
   // the origin, never a setup/invite code or private artifact path.
   res.setHeader('Referrer-Policy', 'strict-origin');
   res.writeHead(status, { 'Content-Type': 'text/html; charset=utf-8', 'Content-Length': Buffer.byteLength(html) });
   res.end(html);
+}
+// Shown on the account origin when a request to a non-public page lacks evidence of a user-started
+// navigation. The click on this same-origin form is that evidence. It has no action, so it posts to the
+// current URL and the fragment survives the redirects.
+export function openPage(res, name) {
+  page(res, 'Open this page', `<h1>Open this page</h1><p>Continue to <strong>${escape(name)}</strong>.</p><form method="post"><button type="submit">Open ${escape(name)}</button></form>`);
 }
 export function nextPath(value) {
   if (!value || !value.startsWith('/') || value.startsWith('//') || [...value].some(c => c.charCodeAt(0) <= 32 || c.charCodeAt(0) === 92)) return '/';
@@ -22,7 +28,14 @@ export function nextPath(value) {
 const nav = member => `<header><a href="/">Yeet</a>${member ? '<a href="/logout">Log out</a>' : ''}</header>${member ? `<nav aria-label="Main"><a href="/">Workspace</a><a href="/connect">Connect terminal</a><a href="/devices">Terminals</a><a href="/account">Account</a>${member.role === 'admin' ? '<a href="/people">People</a>' : ''}</nav><p class="detail">Signed in as ${escape(member.name)}.</p>` : ''}`;
 export async function browser(req, res, pathname, query, member, auth, artifacts) {
   if (await accounts(req, res, pathname, query, member, auth, { page, nav, escape, nextPath, csrfGuard })) return true;
-  if (pathname === '/logout' && req.method === 'GET') {
+  if (pathname === '/logout' && ['GET', 'POST'].includes(req.method)) {
+    // A sibling origin (such as the content origin) could otherwise sign viewers out with an <img>, so a
+    // GET logs out only when the browser says it came from this origin or the address bar.
+    if (req.method === 'GET' && !['same-origin', 'none'].includes(req.headers['sec-fetch-site'])) {
+      page(res, 'Log out', `${nav(member)}<h1>Log out</h1><form method="post" action="/logout"><button type="submit">Log out</button></form>`);
+      return true;
+    }
+    (req.method === 'POST' ? formGuard : csrfGuard)(req, auth.origin());
     res.setHeader('Set-Cookie', await auth.logout(req));
     redirect(res, '/login');
     return true;
