@@ -140,7 +140,8 @@ data/
   Legacy `/login?token=<t>&next=<path>` is supported but not advertised; tokens in
   URLs can leak via browser history. `GET /logout` deletes the current session only
   when `Sec-Fetch-Site` is `same-origin` or `none`. Otherwise it shows a confirmation
-  form, and `POST /logout` (same origin guard as other forms) signs out. Another site,
+  form. `POST /logout` signs out only when it passes the same-origin guard used by
+  account forms and carries an `Origin` header equal to `YEET_ORIGIN`. Another site,
   including a sibling content origin, cannot sign a viewer out with a link or `<img>`.
 - If a browser hits a private or workspace artifact without a valid cookie, respond
   302 to `/login?next=<original path>`. API clients (Accept: application/json or an
@@ -291,10 +292,12 @@ With `YEET_CONTENT_ORIGIN` set, `GET /a/<id>[/...]` on the account origin works 
   This needs `Sec-Fetch-Mode: navigate`, `Sec-Fetch-Dest: document`, `Sec-Fetch-User: ?1`,
   and no `Sec-Purpose` or `Purpose` header.
 - Workspace or private artifact, any other navigation (no Fetch Metadata, a navigation
-  started by script, a prefetch): 200 "Open this page" page. Its button POSTs to the
-  canonical target. `POST /a/<id>/...` runs the same-origin guard used by account forms
-  and the same readability checks, then returns 303 to the grant (or, for a public
-  artifact, to the content origin). A Bearer `POST` gets 404.
+  started by script, a prefetch): 200 "Open this page" page. Its form has no `action`,
+  so the button POSTs to the URL the viewer opened and the browser keeps any `#fragment`
+  through the redirects. `POST /a/<id>/...` requires the same-origin guard used by
+  account forms and an `Origin` header equal to `YEET_ORIGIN`, then runs the same
+  readability checks and returns 303 to the grant for the canonical target (or, for a
+  public artifact, to the content origin). A Bearer `POST` gets 404.
 - Workspace or private artifact, subresource request (`Sec-Fetch-Mode` present and not
   `navigate`, or `Sec-Fetch-Dest` present and not `document`, such as an `<img>`,
   `<script>`, or `fetch` from another page): 404. No page can plant another page's
@@ -339,6 +342,11 @@ GET|HEAD /a/<id>[/...]            the artifact routes above
 
 ## Browser pages (server, inline HTML, no build step)
 
+- Account pages send `Content-Security-Policy: default-src 'none'; style-src 'unsafe-inline';
+  form-action 'self'; base-uri 'none'; frame-ancestors 'none'`. With `YEET_CONTENT_ORIGIN`
+  set, `form-action` is `'self' <YEET_CONTENT_ORIGIN>`, because Chromium applies
+  `form-action` to the redirect after a form POST. Sign-in with `next=/a/<id>/` and the
+  "Open this page" button both redirect to the content origin.
 - `GET /devices/add[?code=]` logged in: form to add or deny a device code, showing the
   requesting device name. `POST /devices/add` with `code` and `action` (`add`|`deny`).
 - `GET /devices` logged in: list own devices (admin: all) with a revoke button that
@@ -482,23 +490,29 @@ a shell.
   storage those artifacts saved. Content cookies are HttpOnly and scoped to
   `Path=/a/<id>/`, but path scoping is not a boundary within one origin. Grants are
   minted only for user-activated top-level navigations or a same-origin form POST, so
-  background requests, prefetches, and script-started navigations cannot start a
-  handoff. A hostile artifact can still get the viewer to open another artifact with a
-  click, through a link or a popup. For the next 12 hours, other artifacts can then load
-  that artifact's files. Only a per-artifact origin would fully separate artifacts from
+  background requests, prefetches, and script navigations without a recent user action
+  cannot start a handoff. User activation lasts a few seconds after any interaction,
+  though, and a script navigation in that window counts as user-started. So any click
+  or keypress on a hostile artifact lets it open another artifact the viewer can read.
+  For the next 12 hours, other artifacts can then load that artifact's files. Only a per-artifact origin would fully separate artifacts from
   each other, and that is not supported.
 - A sibling subdomain content origin (`yeet-content.example.com` next to
   `yeet.example.com`) is same-site to browsers: SameSite=Lax account cookies are sent on
   its requests to the account origin, and Fetch Metadata reports them as `same-site`.
   Yeet relies on its own checks there: the `__Host-` session cookie, the Fetch Metadata
-  and Origin guards, and grants only for user-activated navigations. A separate registrable domain also gets
-  the browser's site boundary and is stronger.
+  and Origin guards, and grants only for user-activated navigations. A separate registrable domain
+  also gets the browser's site boundary and is stronger.
 - Grants are single-use, live for 60 seconds, and are bound to a session record and an
   artifact path. Used nonces are kept in memory only, so a restart forgets them; the
   60-second expiry still applies.
 - Behind HTTPS the session cookie is `__Host-yeet_session`, which a sibling subdomain
   cannot overwrite or shadow (cookie tossing). Browsers sign in again once after the
   upgrade that introduced this name; CLI device tokens are unaffected.
+- The "Open this page" `POST /a/<id>/...` and `POST /logout` require an `Origin` header
+  equal to `YEET_ORIGIN` in addition to the same-origin guard, so a request with no
+  `Origin` header cannot mint a grant or sign a viewer out.
+- In split mode the account-page CSP allows `form-action` to the content origin, because
+  Chromium checks `form-action` against the redirect that follows a form POST.
 - Requests to `/a/<id>/...` on the account origin are served directly only when
   `Authorization` verifies as a member's Bearer token, because a browser cannot attach
   that header to a navigation. Those responses are `Cache-Control: private, no-store`

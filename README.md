@@ -13,12 +13,13 @@ viewer's session. Without `YEET_CONTENT_ORIGIN`, pages run on the same origin as
 account pages, and any member can act as anyone who opens their page.
 
 Some limits remain. Every published page shares the one content origin. A hostile
-page can read browser storage any other page saved there. Background requests,
-prefetches, and script-started navigations can't open another private page. But a
-hostile page can get the viewer to open one with a click, and for the next 12
+page can read browser storage any other page saved there. Background requests
+and prefetches can't open another private page. But any click or keypress on a
+hostile page lets it open another page the viewer can read, and for the next 12
 hours other pages can load that page's files. Only a separate origin per page
-would fully isolate pages, and Yeet doesn't support that. The content policy blocks `fetch` and similar calls, but a
-script can still send what it reads to another site in an image URL. There are no
+would fully isolate pages, and Yeet doesn't support that. The content policy
+blocks `fetch` and similar calls, but a script can still send what it reads to
+another site in an image URL. There are no
 per-member storage quotas. Don't host untrusted publishers. See
 [the security policy](SECURITY.md) before deployment.
 

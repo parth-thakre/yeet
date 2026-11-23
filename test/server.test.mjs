@@ -346,7 +346,7 @@ test('HTTP server contract', { timeout: 60000 }, async t => {
     await json('/api/me', { token: null, headers: { Cookie: cookie }, expected: 401 });
     await status(await request(`/a/${id}/`, { token: null, headers: { Cookie: cookie } }), 302);
     await status(await request(`/a/${publicId}/`, { token: null }), 200);
-    const logout = await request('/logout', { token: null, method: 'POST', headers: { Cookie: cookie } });
+    const logout = await request('/logout', { token: null, method: 'POST', headers: { Cookie: cookie, Origin: origin } });
     assert.ok([200, 302].includes(logout.status));
     assert.match(logout.headers.get('set-cookie'), /^yeet_session=/);
   });

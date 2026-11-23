@@ -413,3 +413,9 @@ function sameOrigin(req) {
 export function csrfGuard(req, origin) {
   if (!sameOrigin(req) || (req.headers.origin !== undefined && req.headers.origin !== origin)) fail(403, 'Cross-site request refused');
 }
+// For browser-only form posts: browsers always send Origin on them, so its absence (a proxy that strips
+// Fetch Metadata and Origin, say) is refused rather than trusted.
+export function formGuard(req, origin) {
+  csrfGuard(req, origin);
+  if (req.headers.origin !== origin) fail(403, 'Cross-site request refused');
+}

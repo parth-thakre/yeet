@@ -2,7 +2,7 @@ import http from 'node:http';
 import path from 'node:path';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 import { performance } from 'node:perf_hooks';
-import { authStore, csrfGuard, readable } from './auth.mjs';
+import { authStore, formGuard, readable } from './auth.mjs';
 import { artifactStore } from './artifacts.mjs';
 import { api } from './api.mjs';
 import { browser, openPage } from './pages.mjs';
@@ -46,7 +46,7 @@ async function artifact(req, res, pathname, query, artifacts, allow, methods = [
 // served here, but browsers are sent on: public pages directly, others through a one-time grant.
 const accountAccess = (req, res, member, content, auth) => async (value, relative) => {
   const post = req.method === 'POST';
-  if (post) csrfGuard(req, auth.origin()); // the "Open this page" form; it has no fields to read
+  if (post) formGuard(req, auth.origin()); // the "Open this page" form; it has no fields to read
   if (!readable(value, member)) {
     if (!member) {
       if (req.headers.authorization !== undefined || /application\/json/i.test(req.headers.accept || '')) fail(401, 'Authentication required');
@@ -74,7 +74,7 @@ const accountAccess = (req, res, member, content, auth) => async (value, relativ
     if ((mode !== undefined && mode !== 'navigate') || (dest !== undefined && dest !== 'document')) fail(404, 'Not found');
     const activated = mode === 'navigate' && dest === 'document' && req.headers['sec-fetch-user'] === '?1'
       && req.headers['sec-purpose'] === undefined && req.headers.purpose === undefined;
-    if (!activated) { openPage(res, value.name || value.id, target); return true; }
+    if (!activated) { openPage(res, value.name || value.id); return true; }
   }
   redirect(res, `${content.origin}/.yeet/grant?t=${await content.grant(req, value.id, target)}`, post ? 303 : 302);
   return true;
@@ -119,6 +119,9 @@ export async function createServer(env = process.env) {
     res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
     res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader('Cache-Control', 'no-store');
+    // Account pages' form-action: Chromium applies it to every redirect after a form post, and sign-in
+    // and the "Open this page" form both end on the content origin.
+    res.formTargets = content ? `'self' ${content.origin}` : "'self'";
     try {
       let pathname;
       try { pathname = decodeURIComponent(rawPath); } catch { fail(400, 'Invalid URL encoding'); }

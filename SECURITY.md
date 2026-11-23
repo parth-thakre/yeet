@@ -17,10 +17,11 @@ you deployed it, and the steps that reproduce the problem.
   publishers you don't trust.
 - Every published page shares the one content origin. A hostile page can read
   browser storage, such as `localStorage`, that any published page saved.
-- Background requests, prefetches, and script-started navigations can't start the
-  handoff that opens a private page on the content origin. A hostile page can still
-  get the viewer to open another page with a click, through a link or a popup. For
-  the next 12 hours, other published pages can then load that page's files.
+- Background requests and prefetches can't start the handoff that opens a private
+  page on the content origin. But any click or keypress on a hostile page lets it
+  open another page the viewer can read, because a script navigation in the few
+  seconds after a user action counts as user-started. For the next 12 hours, other
+  published pages can then load that page's files.
 - Only a separate origin per page would fully isolate pages from each other, and
   Yeet doesn't support that.
 - Browsers treat a sibling subdomain, such as `yeet-content.example.com` next to

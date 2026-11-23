@@ -103,7 +103,7 @@ test('security fixes from the auth review', async t => {
     await jsonRequest(origin, '/api/me', { headers: { Cookie: cookie }, expected: 401 });
     const other = await cookieFromLogin(origin, adminToken);
     assert.equal((await jsonRequest(origin, '/api/me', { headers: { Cookie: other } })).name, 'admin');
-    const logout = await fetch(`${origin}/logout`, { method: 'POST', headers: { Cookie: other }, redirect: 'manual' });
+    const logout = await fetch(`${origin}/logout`, { method: 'POST', headers: { Cookie: other, Origin: origin }, redirect: 'manual' });
     assert.equal(logout.status, 302);
     await jsonRequest(origin, '/api/me', { headers: { Cookie: other }, expected: 401 }, 'a replayed cookie is dead after logout');
   });
@@ -238,6 +238,7 @@ test('legacy single-origin mode serves pages on the account origin and warns onc
   assert.match(page.headers['content-security-policy'], /sandbox allow-scripts allow-same-origin;/);
   assert.equal((await hit(port, host, `/a/${id}`, { headers: { Cookie: cookie } })).headers.location, `/a/${id}/`);
   assert.equal((await hit(port, host, `/.yeet/grant?t=x`)).status, 404);
+  assert.match((await hit(port, host, '/login')).headers['content-security-policy'], /form-action 'self';/, 'legacy form-action stays self only');
   assert.equal(output().match(/YEET_CONTENT_ORIGIN/g)?.length, 1);
 });
 
@@ -305,6 +306,8 @@ test('published pages are served from a separate content origin', async t => {
     assert.equal((await onContent('/healthz', { method: 'HEAD' })).status, 200);
     assert.equal((await hit(port, contentHost.toUpperCase(), '/api/me', { headers: bearer(adminToken) })).status, 404, 'Host is compared case-insensitively');
     assert.equal((await account('/.yeet/grant?t=x')).status, 404, 'grants are redeemed only on the content host');
+    // Sign-in with next=/a/... redirects on to the content origin; form-action must allow it.
+    assert.match((await account('/login')).headers['content-security-policy'], new RegExp(`form-action 'self' ${content};`));
     assert.deepEqual(await api('/api/server'), { contentOrigin: content }, 'the account origin advertises the content origin without auth');
     assert.equal((await onContent('/api/server')).status, 404);
     const forwarded = await account('/api/me', { headers: { ...bearer(adminToken), 'X-Forwarded-Host': contentHost } });
@@ -395,7 +398,9 @@ test('published pages are served from a separate content origin', async t => {
       assert.equal(response.headers['cache-control'], 'no-store', name);
       assert.match(response.headers['content-security-policy'], /default-src 'none'.*form-action 'self'/, name);
       assert.match(response.body, /<h1>Open this page<\/h1>/, name);
-      assert.ok(response.body.includes(`<form method="post" action="/a/${workspaceId}/sub/?q=1"><button type="submit">Open ${workspaceId}</button>`), name);
+      // No action: the form posts to the current URL, so a #fragment survives the redirects.
+      assert.ok(response.body.includes(`<form method="post"><button type="submit">Open ${workspaceId}</button>`), name);
+      assert.match(response.headers['content-security-policy'], new RegExp(`form-action 'self' ${content};`), 'the post may end on the content origin');
     }
     // The page name is escaped.
     const named = await jsonRequest(local, '/api/artifacts', { method: 'POST', headers: bearer(adminToken), body: { visibility: 'workspace', name: '<b>"x"</b>' }, expected: 201 });
@@ -419,7 +424,13 @@ test('published pages are served from a separate content origin', async t => {
     assert.match((await account(`/a/${workspaceId}/`, { method: 'POST', headers: { Origin: origin } })).headers.location, /^\/login\?next=/, 'signed out: sign in first');
     const alicePrivate = await publish(local, aliceToken, 'private');
     assert.equal((await post({ Origin: origin }, `/a/${alicePrivate}/`)).status, 404, 'unreadable stays 404');
-    assert.equal((await account(`/a/${workspaceId}/`, { method: 'POST', headers: bearer(adminToken) })).status, 404, 'bearer clients do not post');
+    assert.equal((await account(`/a/${workspaceId}/`, { method: 'POST', headers: { ...bearer(adminToken), Origin: origin } })).status, 404, 'bearer clients do not post');
+    for (const headers of [{}, { 'Sec-Fetch-Site': 'same-origin' }]) {
+      assert.equal((await post(headers)).status, 403, `no Origin is no evidence: ${JSON.stringify(headers)}`);
+    }
+    // The form posts to whatever URL showed it; the grant still targets the canonical path.
+    const loose = await post({ Origin: origin }, `/%61/${workspaceId}/sub/?q=1`);
+    assert.equal((await onContent(loose.headers.location.slice(content.length))).headers.location, `/a/${workspaceId}/sub/?q=1`);
     assert.equal((await onContent(`/a/${publicId}/`, { method: 'POST' })).status, 404, 'no POST on the content host');
   });
 
@@ -545,6 +556,8 @@ test('published pages are served from a separate content origin', async t => {
     assert.equal(confirm.headers['set-cookie'], undefined);
     assert.match(confirm.body, /<form method="post" action="\/logout"><button type="submit">Log out<\/button><\/form>/);
     assert.equal((await account('/logout', { method: 'POST', headers: { Cookie: browser, Origin: content } })).status, 403, 'a POST from the content origin is refused');
+    assert.equal((await account('/logout', { method: 'POST', headers: { Cookie: browser } })).status, 403, 'a POST without Origin is refused');
+    assert.equal((await account('/logout', { method: 'POST', headers: { Cookie: browser, 'Sec-Fetch-Site': 'same-origin' } })).status, 403);
     assert.equal((await onContent(`/a/${privateId}/`, { headers: { Cookie: cookie } })).status, 200, 'still signed in');
     const other = await login(adminToken);
     const posted = await account('/logout', { method: 'POST', headers: { Cookie: other, Origin: origin } });
