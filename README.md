@@ -8,15 +8,18 @@ Terminals connect once and remember the server. There is no public signup.
 
 Yeet is an early release for small, trusted workspaces. Members can publish pages
 with scripts. Set `YEET_CONTENT_ORIGIN` to a second hostname and Yeet serves those
-pages from there. That origin has no account access, so a page's scripts can't act
-as the person who opens it. Without `YEET_CONTENT_ORIGIN`, pages run on the same
-origin as account pages, and any member can act as anyone who opens their page.
+pages from there, where their scripts can't reach account pages, the API, or the
+viewer's session. Without `YEET_CONTENT_ORIGIN`, pages run on the same origin as
+account pages, and any member can act as anyone who opens their page.
 
-Some limits remain. Every published page shares the one content origin, so a
-page's scripts can read browser storage another page saved there. The content
-policy still blocks scripts from making network requests. There are no per-member
-storage quotas. Don't host untrusted publishers. See [the security policy](SECURITY.md)
-before deployment.
+Some limits remain. Every published page shares the one content origin. A hostile
+page can load files from other pages the viewer opened in the last 12 hours, and
+read browser storage any other page saved there. Pages the viewer hasn't opened stay out of
+reach. Keeping pages apart from each other would need an origin per page, which
+Yeet doesn't support. The content policy blocks `fetch` and similar calls, but a
+script can still send what it reads to another site in an image URL. There are no
+per-member storage quotas. Don't host untrusted publishers. See
+[the security policy](SECURITY.md) before deployment.
 
 Get the source and install the CLI with Node 22 or newer:
 

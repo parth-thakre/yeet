@@ -40,10 +40,12 @@ node:path, node:stream, etc.). Dev dependencies are also disallowed; tests use n
 - `YEET_CONTENT_ORIGIN` origin that serves artifact bytes, e.g. `https://yeet-content.example`.
   Validated like `YEET_ORIGIN`: http or https, no path or credentials, trailing slashes
   trimmed. Startup fails if it is set while `YEET_ORIGIN` is unset, if it equals
-  `YEET_ORIGIN`, or if its hostname equals the `YEET_ORIGIN` hostname. Unset (Compose
+  `YEET_ORIGIN`, if its hostname equals the `YEET_ORIGIN` hostname, or if `YEET_ORIGIN` is
+  https and it is not. Unset (Compose
   passes an empty value) keeps the legacy single-origin mode, where artifacts are served
   on `YEET_ORIGIN` as before, and prints a startup warning that published scripts share
-  the account origin. A separate registrable domain is preferred; a sibling subdomain works.
+  the account origin. A separate registrable domain is preferred. A sibling subdomain works,
+  but browsers treat it as the same site as `YEET_ORIGIN`.
   One listener serves both origins. A request whose `Host` header matches the content
   origin's `URL.host` (`host[:port]`, case-insensitive) goes to the content router; every
   other request goes to the account router. `X-Forwarded-Host` is never consulted, so a
@@ -136,7 +138,9 @@ data/
 - `GET /login` renders username/password sign-in. `POST /login` accepts name,
   password, and a safe local next path. `/login/token` retains advanced token sign-in.
   Legacy `/login?token=<t>&next=<path>` is supported but not advertised; tokens in
-  URLs can leak via browser history. `GET /logout` deletes the current session.
+  URLs can leak via browser history. `GET /logout` deletes the current session. It
+  first runs the same Fetch Metadata and Origin guard as state-changing requests, so
+  another site, including a sibling content origin, cannot sign a viewer out.
 - If a browser hits a private or workspace artifact without a valid cookie, respond
   302 to `/login?next=<original path>`. API clients (Accept: application/json or an
   Authorization header) get 401.
@@ -271,13 +275,18 @@ and by the content router when it is set. The redirects for a missing trailing s
 
 With `YEET_CONTENT_ORIGIN` set, `GET /a/<id>[/...]` on the account origin works like this:
 
-- With an `Authorization` header (CLI bearer, e.g. `yeet call`): served directly with the
-  usual checks. A browser cannot attach this header to a navigation.
-- `Accept: application/json` without auth: 401.
+- An `Authorization` header that verifies as a member's Bearer token, for a member who
+  can read the artifact: served directly, with `Cache-Control: private, no-store`. A
+  browser cannot attach this header to a navigation.
+- `Authorization` that does not verify, or `Accept: application/json`, without access: 401.
 - Browser without a session: 302 to `/login?next=<original path>`. A session that
   cannot read the artifact: 404.
 - Public artifact: 302 to `${YEET_CONTENT_ORIGIN}` + same path and query.
-- Workspace or private artifact: 302 to `${YEET_CONTENT_ORIGIN}/.yeet/grant?t=<grant>`.
+- Workspace or private artifact, top-level navigation: 302 to
+  `${YEET_CONTENT_ORIGIN}/.yeet/grant?t=<grant>`. A grant is minted only when
+  `Sec-Fetch-Mode` is `navigate` and `Sec-Fetch-Dest` is `document`, where the browser
+  sends them. Any other request (an `<img>`, `<script>`, or `fetch` from another page)
+  gets 404, so a page cannot plant another page's cookie for itself.
 
 The content router serves only the routes below. Everything else is 404, including `/login`,
 `/api/...`, and account pages.
@@ -285,7 +294,7 @@ The content router serves only the routes below. Everything else is 404, includi
 ```
 GET|HEAD /healthz                 200 {"ok":true}
 GET|HEAD /css/yeet-v1.css         the shared stylesheet; artifacts link it by absolute path
-GET      /.yeet/grant?t=<grant>   set the content cookie, 302 to the grant's path
+GET|HEAD /.yeet/grant?t=<grant>   set the content cookie, 302 to the grant's path
 GET|HEAD /a/<id>[/...]            the artifact routes above
 ```
 
@@ -313,8 +322,8 @@ GET|HEAD /a/<id>[/...]            the artifact routes above
   mints a new grant after login. Public artifacts need no cookie.
 - Content origin responses carry the same artifact headers and CSP as above.
 - Stable links stay on `YEET_ORIGIN` (`/a/<id>/`). Throw responses, CLI mapping files,
-  and `yeet open` are unchanged. `yeet call` with a token is served directly; without
-  a token, a public link follows the redirect to the content origin.
+  and `yeet open` are unchanged. `yeet call` downloads the version tar from the account
+  API with `redirect: 'error'`; the CLI never contacts the content origin.
 
 ## Browser pages (server, inline HTML, no build step)
 
@@ -449,20 +458,36 @@ a shell.
   still sends the content cookie, but not forms, popups, or other sandbox privileges.
   Frame and worker directives are none. This is not an iframe sandbox attribute that
   an uploaded script could remove. Account pages use COOP same-origin; artifacts use
-  unsafe-none to sever account opener references. Script-driven network access remains
-  blocked. Never put account credentials in localStorage or non-HttpOnly cookies; in
+  unsafe-none to sever account opener references. `connect-src 'none'` blocks fetch,
+  XHR, WebSocket, and beacons. The policy still allows https images and media and does
+  not stop navigation, so a hostile script can send what it reads to another site in a
+  URL. Never put account credentials in localStorage or non-HttpOnly cookies; in
   legacy single-origin mode artifacts share that origin.
-- All artifacts share one content origin, so one artifact's scripts can read browser
-  storage another artifact saved there. Content cookies are HttpOnly and scoped to
-  `Path=/a/<id>/`, and each one is checked against the artifact it names.
+- The content origin keeps artifacts away from account pages, the API, and the session.
+  It does not keep artifacts apart from each other. All artifacts share one content
+  origin, so a hostile artifact can load the files of other artifacts the viewer has
+  opened while their content cookies last (up to 12 hours), and can read browser
+  storage those artifacts saved. Content cookies are HttpOnly and scoped to
+  `Path=/a/<id>/`, but path scoping is not a boundary within one origin. Grants are
+  minted only for top-level navigations, so artifacts the viewer has not opened stay
+  out of reach. Separating artifacts from each other would need a per-artifact origin,
+  which is not supported.
+- A sibling subdomain content origin (`yeet-content.example.com` next to
+  `yeet.example.com`) is same-site to browsers: SameSite=Lax account cookies are sent on
+  its requests to the account origin, and Fetch Metadata reports them as `same-site`.
+  Yeet relies on its own checks there: the `__Host-` session cookie, the Fetch Metadata
+  and Origin guards, and navigation-only grants. A separate registrable domain also gets
+  the browser's site boundary and is stronger.
 - Grants are single-use, live for 60 seconds, and are bound to a session record and an
   artifact path. Used nonces are kept in memory only, so a restart forgets them; the
   60-second expiry still applies.
 - Behind HTTPS the session cookie is `__Host-yeet_session`, which a sibling subdomain
   cannot overwrite or shadow (cookie tossing). Browsers sign in again once after the
   upgrade that introduced this name; CLI device tokens are unaffected.
-- Requests with `Authorization` to `/a/<id>/...` on the account origin are served
-  directly, because a browser cannot attach that header to a navigation.
+- Requests to `/a/<id>/...` on the account origin are served directly only when
+  `Authorization` verifies as a member's Bearer token, because a browser cannot attach
+  that header to a navigation. Those responses are `Cache-Control: private, no-store`
+  so no shared cache replays them to a browser.
 - Sessions record the device token that created them (`tokenId`). Revoking a token
   prunes those sessions; removing a member prunes all of theirs; `/logout` deletes
   the current session server-side, not just the cookie.

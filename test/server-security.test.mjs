@@ -206,6 +206,7 @@ test('startup validates YEET_CONTENT_ORIGIN and keeps one private signing key', 
     [{ YEET_ORIGIN: 'https://yeet.example', YEET_CONTENT_ORIGIN: 'https://user:pw@content.example' }, /YEET_CONTENT_ORIGIN must be an HTTP\(S\) origin/],
     [{ YEET_ORIGIN: 'https://yeet.example', YEET_CONTENT_ORIGIN: 'ftp://content.example' }, /YEET_CONTENT_ORIGIN must be an HTTP\(S\) origin/],
     [{ YEET_ORIGIN: 'https://yeet.example', YEET_CONTENT_ORIGIN: 'not a url' }, /YEET_CONTENT_ORIGIN must be an HTTP\(S\) origin/],
+    [{ YEET_ORIGIN: 'https://yeet.example', YEET_CONTENT_ORIGIN: 'http://content.example' }, /must use https when YEET_ORIGIN does/],
   ];
   for (const [extra, message] of refused) await assert.rejects(createYeet(env(extra)), message, JSON.stringify(extra));
   // Compose passes an empty string when the variable is unset: that is legacy mode, not an error.
@@ -335,6 +336,66 @@ test('published pages are served from a separate content origin', async t => {
     assert.equal(anonymous.headers.location, `/login?next=${encodeURIComponent(`/a/${workspaceId}/sub/`)}`);
     assert.equal((await account(`/a/${privateId}/`, { headers: bearer(aliceToken) })).status, 404, 'unreadable stays 404');
     assert.equal((await account(`/a/${privateId}/`, { headers: { Cookie: await login(aliceToken) } })).status, 404, 'no grant for an unreadable page');
+    // Only a verified Bearer member is served here; other Authorization (a proxy's Basic auth) is a browser.
+    for (const authorization of ['Basic dXNlcjpwYXNz', 'Bearer not-a-real-token']) {
+      const moved = await account(`/a/${publicId}/`, { headers: { Authorization: authorization } });
+      assert.equal(moved.status, 302, authorization);
+      assert.equal(moved.headers.location, `${content}/a/${publicId}/`);
+    }
+    assert.equal((await account(`/a/${privateId}/`, { headers: { Authorization: 'Basic dXNlcjpwYXNz' } })).status, 401, 'unchanged: unverified Authorization on a non-public page');
+  });
+
+  await t.test('bearer bytes on the account host are never stored by a shared cache', async () => {
+    for (const id of [publicId, workspaceId, privateId]) {
+      const served = await account(`/a/${id}/`, { headers: bearer(adminToken) });
+      assert.equal(served.status, 200);
+      assert.equal(served.headers['cache-control'], 'private, no-store', id);
+      assert.equal((await account(`/a/${id}`, { headers: bearer(adminToken) })).headers['cache-control'], 'private, no-store');
+    }
+    assert.equal((await onContent(`/a/${publicId}/`)).headers['cache-control'], 'public, max-age=60', 'the content host keeps its policy');
+  });
+
+  await t.test('grants are minted only for top-level navigations', async () => {
+    const asked = headers => account(`/a/${privateId}/sub/`, { headers: { Cookie: adminCookie, ...headers } });
+    const navigation = await asked({ 'Sec-Fetch-Mode': 'navigate', 'Sec-Fetch-Dest': 'document', 'Sec-Fetch-Site': 'same-site' });
+    assert.equal(navigation.status, 302);
+    assert.ok(navigation.headers.location.startsWith(`${content}/.yeet/grant?t=`));
+    const subresources = [
+      { 'Sec-Fetch-Mode': 'no-cors', 'Sec-Fetch-Dest': 'image', 'Sec-Fetch-Site': 'same-site' },
+      { 'Sec-Fetch-Mode': 'no-cors', 'Sec-Fetch-Dest': 'script' },
+      { 'Sec-Fetch-Mode': 'navigate', 'Sec-Fetch-Dest': 'iframe' },
+      { 'Sec-Fetch-Mode': 'cors' },
+      { 'Sec-Fetch-Dest': 'image' },
+    ];
+    for (const headers of subresources) {
+      const response = await asked(headers);
+      assert.equal(response.status, 404, JSON.stringify(headers));
+      assert.equal(response.headers.location, undefined);
+    }
+    const image = await account(`/a/${publicId}/`, { headers: { 'Sec-Fetch-Mode': 'no-cors', 'Sec-Fetch-Dest': 'image' } });
+    assert.equal(image.headers.location, `${content}/a/${publicId}/`, 'public pages still redirect for subresources');
+  });
+
+  await t.test('the grant target is canonical even when the request path was percent-encoded', async () => {
+    const encodedId = `%${workspaceId.charCodeAt(0).toString(16)}${workspaceId.slice(1)}`;
+    for (const [route, expected] of [[`/%61/${workspaceId}/sub/?q=1`, `/a/${workspaceId}/sub/?q=1`], [`/a/${encodedId}/sub/index%2Ehtml`, `/a/${workspaceId}/sub/index.html`], [`/a/${encodedId}`, `/a/${workspaceId}/`]]) {
+      const { location, cookie } = await contentCookie(adminCookie, workspaceId, route);
+      assert.equal(location, expected, route);
+      assert.equal((await onContent(location, { headers: { Cookie: cookie } })).status, 200, route);
+    }
+    assert.equal((await account(`/%61/${publicId}/`)).headers.location, `${content}/a/${publicId}/`);
+  });
+
+  await t.test('HEAD follows the whole handoff and spends the grant', async () => {
+    const handoff = await account(`/a/${privateId}/`, { method: 'HEAD', headers: { Cookie: adminCookie } });
+    assert.equal(handoff.status, 302);
+    const grant = handoff.headers.location.slice(content.length);
+    const granted = await onContent(grant, { method: 'HEAD' });
+    assert.equal(granted.status, 302);
+    const page = await onContent(granted.headers.location, { method: 'HEAD', headers: { Cookie: granted.headers['set-cookie'][0].split(';')[0] } });
+    assert.equal(page.status, 200);
+    assert.equal(page.body, '');
+    assert.equal((await onContent(grant)).status, 403, 'a grant spent by HEAD cannot be used again');
   });
 
   await t.test('a browser is handed over through a grant to a page-scoped cookie', async () => {
@@ -406,7 +467,7 @@ test('published pages are served from a separate content origin', async t => {
       assert.equal(response.status, 403, `${name}: ${response.body}`);
       assert.equal(response.headers['set-cookie'], undefined, name);
     }
-    assert.equal((await onContent(grant, { method: 'HEAD' })).status, 404, 'HEAD cannot spend a grant');
+    assert.equal((await onContent(grant, { method: 'HEAD' })).status, 403, 'HEAD cannot replay a spent grant');
     assert.doesNotMatch(output(), /Unexpected error/);
   });
 
@@ -424,7 +485,11 @@ test('published pages are served from a separate content origin', async t => {
     const browser = await login(adminToken);
     const { cookie } = await contentCookie(browser, privateId);
     assert.equal((await onContent(`/a/${privateId}/`, { headers: { Cookie: cookie } })).status, 200);
-    assert.equal((await account('/logout', { headers: { Cookie: browser } })).status, 302);
+    // GET /logout is guarded like a form post, so a sibling origin cannot sign viewers out with an <img>.
+    for (const site of ['same-site', 'cross-site']) assert.equal((await account('/logout', { headers: { Cookie: browser, 'Sec-Fetch-Site': site } })).status, 403, site);
+    assert.equal((await account('/logout', { headers: { Cookie: browser, Origin: content } })).status, 403);
+    assert.equal((await onContent(`/a/${privateId}/`, { headers: { Cookie: cookie } })).status, 200, 'still signed in');
+    assert.equal((await account('/logout', { headers: { Cookie: browser, 'Sec-Fetch-Site': 'same-origin' } })).status, 302);
     const loggedOut = await onContent(`/a/${privateId}/`, { headers: { Cookie: cookie } });
     assert.equal(loggedOut.status, 302);
     assert.equal(loggedOut.headers.location, `${origin}/a/${privateId}/`);

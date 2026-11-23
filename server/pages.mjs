@@ -23,6 +23,8 @@ const nav = member => `<header><a href="/">Yeet</a>${member ? '<a href="/logout"
 export async function browser(req, res, pathname, query, member, auth, artifacts) {
   if (await accounts(req, res, pathname, query, member, auth, { page, nav, escape, nextPath, csrfGuard })) return true;
   if (pathname === '/logout' && req.method === 'GET') {
+    // A sibling origin (such as the content origin) could otherwise sign viewers out with an <img>.
+    csrfGuard(req, auth.origin());
     res.setHeader('Set-Cookie', await auth.logout(req));
     redirect(res, '/login');
     return true;

@@ -159,7 +159,9 @@ site or the content site from the `Host` header, so the tunnel or proxy must pas
 
 1. Pick the hostname. A separate registrable domain, such as `yeet-content.net` next
    to `yeet.example.com`, is best where you can get one. A sibling subdomain such as
-   `yeet-content.example.com` also works.
+   `yeet-content.example.com` also works, but browsers treat it as the same site as
+   `yeet.example.com`. Yeet then relies on its own checks to keep published pages away
+   from account cookies, without the browser's site boundary as a second layer.
 2. Add a DNS record for it the same way as for `YEET_ORIGIN`.
 3. Route it in your tunnel or proxy to the same `yeet:3000` or `127.0.0.1:3000`
    service as the main hostname. The Cloudflare and Caddy examples below include it.
@@ -209,7 +211,8 @@ HOSTNAME=yeet.example.com bash cloudflare-tunnel.sh
 The content hostname defaults to the first label of `HOSTNAME` plus `-content`, here
 `yeet-content.example.com`. Cloudflare's free certificate covers it because it is one level
 below the zone. Set `CONTENT_HOSTNAME` to choose another name, including one in a second zone
-the token can edit. `CONTENT_HOSTNAME=none` skips it.
+the token can edit; a separate registrable domain is stronger than the sibling default.
+`CONTENT_HOSTNAME=none` skips it.
 
 The script writes `YEET_ORIGIN`, `YEET_CONTENT_ORIGIN`, and `CLOUDFLARED_UID=$(id -u)` to `.env`
 (the connector runs as that uid so it can read the 600-mode credentials file). Check them, then

@@ -33,7 +33,11 @@ if [ "$CONTENT_HOSTNAME" = none ]; then
 else
   [ "$CONTENT_HOSTNAME" != "$HOSTNAME" ] || { echo "error: CONTENT_HOSTNAME must differ from HOSTNAME" >&2; exit 1; }
   case "$CONTENT_HOSTNAME" in *.*) ;; *) echo "error: CONTENT_HOSTNAME must be a full hostname, e.g. yeet-content.example.com" >&2; exit 1 ;; esac
-  CONTENT_ZONE_NAME="${CONTENT_ZONE_NAME:-$(echo "$CONTENT_HOSTNAME" | awk -F. '{print $(NF-1)"."$NF}')}"
+  # A hostname inside ZONE_NAME uses that zone, so a ZONE_NAME override such as example.co.uk carries over.
+  case "$CONTENT_HOSTNAME" in
+    "$ZONE_NAME" | *."$ZONE_NAME") CONTENT_ZONE_NAME="${CONTENT_ZONE_NAME:-$ZONE_NAME}" ;;
+    *) CONTENT_ZONE_NAME="${CONTENT_ZONE_NAME:-$(echo "$CONTENT_HOSTNAME" | awk -F. '{print $(NF-1)"."$NF}')}" ;;
+  esac
 fi
 if [ -z "${CF_API_TOKEN:-}" ] && [ -n "${CF_API_TOKEN_FILE:-}" ]; then CF_API_TOKEN="$(tr -d '[:space:]' < "$CF_API_TOKEN_FILE")"; fi
 : "${CF_API_TOKEN:?set CF_API_TOKEN or CF_API_TOKEN_FILE}"
@@ -127,6 +131,9 @@ else
 fi
 
 docker compose --env-file "$ENV_FILE" --profile cloudflare up -d --wait
+# config.yml is a bind mount that cloudflared reads only at startup, and Compose doesn't
+# recreate a running connector for a changed file. Recreate it so the new ingress applies.
+docker compose --env-file "$ENV_FILE" --profile cloudflare up -d --wait --no-deps --force-recreate cloudflared
 echo "Yeet is now served at https://$HOSTNAME"
 if [ -n "$CONTENT_HOSTNAME" ]; then
   echo "Published pages are served from https://$CONTENT_HOSTNAME"
