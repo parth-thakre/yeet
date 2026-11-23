@@ -13,6 +13,11 @@ export function page(res, title, content, status = 200) {
   res.writeHead(status, { 'Content-Type': 'text/html; charset=utf-8', 'Content-Length': Buffer.byteLength(html) });
   res.end(html);
 }
+// Shown on the account origin when a request to a non-public page lacks evidence of a user-started
+// navigation. The click on this same-origin form is that evidence.
+export function openPage(res, name, action) {
+  page(res, 'Open this page', `<h1>Open this page</h1><p>Continue to <strong>${escape(name)}</strong>.</p><form method="post" action="${escape(action)}"><button type="submit">Open ${escape(name)}</button></form>`);
+}
 export function nextPath(value) {
   if (!value || !value.startsWith('/') || value.startsWith('//') || [...value].some(c => c.charCodeAt(0) <= 32 || c.charCodeAt(0) === 92)) return '/';
   const url = new URL(value, 'http://yeet.local');
@@ -22,8 +27,13 @@ export function nextPath(value) {
 const nav = member => `<header><a href="/">Yeet</a>${member ? '<a href="/logout">Log out</a>' : ''}</header>${member ? `<nav aria-label="Main"><a href="/">Workspace</a><a href="/connect">Connect terminal</a><a href="/devices">Terminals</a><a href="/account">Account</a>${member.role === 'admin' ? '<a href="/people">People</a>' : ''}</nav><p class="detail">Signed in as ${escape(member.name)}.</p>` : ''}`;
 export async function browser(req, res, pathname, query, member, auth, artifacts) {
   if (await accounts(req, res, pathname, query, member, auth, { page, nav, escape, nextPath, csrfGuard })) return true;
-  if (pathname === '/logout' && req.method === 'GET') {
-    // A sibling origin (such as the content origin) could otherwise sign viewers out with an <img>.
+  if (pathname === '/logout' && ['GET', 'POST'].includes(req.method)) {
+    // A sibling origin (such as the content origin) could otherwise sign viewers out with an <img>, so a
+    // GET logs out only when the browser says it came from this origin or the address bar.
+    if (req.method === 'GET' && !['same-origin', 'none'].includes(req.headers['sec-fetch-site'])) {
+      page(res, 'Log out', `${nav(member)}<h1>Log out</h1><form method="post" action="/logout"><button type="submit">Log out</button></form>`);
+      return true;
+    }
     csrfGuard(req, auth.origin());
     res.setHeader('Set-Cookie', await auth.logout(req));
     redirect(res, '/login');

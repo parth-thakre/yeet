@@ -138,9 +138,10 @@ data/
 - `GET /login` renders username/password sign-in. `POST /login` accepts name,
   password, and a safe local next path. `/login/token` retains advanced token sign-in.
   Legacy `/login?token=<t>&next=<path>` is supported but not advertised; tokens in
-  URLs can leak via browser history. `GET /logout` deletes the current session. It
-  first runs the same Fetch Metadata and Origin guard as state-changing requests, so
-  another site, including a sibling content origin, cannot sign a viewer out.
+  URLs can leak via browser history. `GET /logout` deletes the current session only
+  when `Sec-Fetch-Site` is `same-origin` or `none`. Otherwise it shows a confirmation
+  form, and `POST /logout` (same origin guard as other forms) signs out. Another site,
+  including a sibling content origin, cannot sign a viewer out with a link or `<img>`.
 - If a browser hits a private or workspace artifact without a valid cookie, respond
   302 to `/login?next=<original path>`. API clients (Accept: application/json or an
   Authorization header) get 401.
@@ -270,10 +271,13 @@ GET /a/<id>/v/N/<path...>   serve version N file
 - Never list directories. Never serve `.yeet.json` or any dotfile.
 
 The routes above are served by the account router when `YEET_CONTENT_ORIGIN` is unset,
-and by the content router when it is set. The redirects for a missing trailing slash and
-`?v=N` happen on whichever origin finally serves the bytes.
+and by the content router when it is set. The `?v=N` redirect happens on the origin that
+serves the bytes. With a content origin, the account origin's redirect target is canonical:
+`/a/<id>/`, then the rest of the path with each segment re-encoded, then the raw query. So
+`/a/<id>` and percent-encoded forms are normalized in that first 302.
 
-With `YEET_CONTENT_ORIGIN` set, `GET /a/<id>[/...]` on the account origin works like this:
+With `YEET_CONTENT_ORIGIN` set, `GET /a/<id>[/...]` on the account origin works like this
+(and `POST`, for the "Open this page" button):
 
 - An `Authorization` header that verifies as a member's Bearer token, for a member who
   can read the artifact: served directly, with `Cache-Control: private, no-store`. A
@@ -281,12 +285,20 @@ With `YEET_CONTENT_ORIGIN` set, `GET /a/<id>[/...]` on the account origin works 
 - `Authorization` that does not verify, or `Accept: application/json`, without access: 401.
 - Browser without a session: 302 to `/login?next=<original path>`. A session that
   cannot read the artifact: 404.
-- Public artifact: 302 to `${YEET_CONTENT_ORIGIN}` + same path and query.
-- Workspace or private artifact, top-level navigation: 302 to
-  `${YEET_CONTENT_ORIGIN}/.yeet/grant?t=<grant>`. A grant is minted only when
-  `Sec-Fetch-Mode` is `navigate` and `Sec-Fetch-Dest` is `document`, where the browser
-  sends them. Any other request (an `<img>`, `<script>`, or `fetch` from another page)
-  gets 404, so a page cannot plant another page's cookie for itself.
+- Public artifact: 302 to `${YEET_CONTENT_ORIGIN}` + the canonical target.
+- Workspace or private artifact, user-activated top-level navigation: 302 to
+  `${YEET_CONTENT_ORIGIN}/.yeet/grant?t=<grant>`, whose path is the canonical target.
+  This needs `Sec-Fetch-Mode: navigate`, `Sec-Fetch-Dest: document`, `Sec-Fetch-User: ?1`,
+  and no `Sec-Purpose` or `Purpose` header.
+- Workspace or private artifact, any other navigation (no Fetch Metadata, a navigation
+  started by script, a prefetch): 200 "Open this page" page. Its button POSTs to the
+  canonical target. `POST /a/<id>/...` runs the same-origin guard used by account forms
+  and the same readability checks, then returns 303 to the grant (or, for a public
+  artifact, to the content origin). A Bearer `POST` gets 404.
+- Workspace or private artifact, subresource request (`Sec-Fetch-Mode` present and not
+  `navigate`, or `Sec-Fetch-Dest` present and not `document`, such as an `<img>`,
+  `<script>`, or `fetch` from another page): 404. No page can plant another page's
+  cookie without a user action.
 
 The content router serves only the routes below. Everything else is 404, including `/login`,
 `/api/...`, and account pages.
@@ -469,14 +481,17 @@ a shell.
   opened while their content cookies last (up to 12 hours), and can read browser
   storage those artifacts saved. Content cookies are HttpOnly and scoped to
   `Path=/a/<id>/`, but path scoping is not a boundary within one origin. Grants are
-  minted only for top-level navigations, so artifacts the viewer has not opened stay
-  out of reach. Separating artifacts from each other would need a per-artifact origin,
-  which is not supported.
+  minted only for user-activated top-level navigations or a same-origin form POST, so
+  background requests, prefetches, and script-started navigations cannot start a
+  handoff. A hostile artifact can still get the viewer to open another artifact with a
+  click, through a link or a popup. For the next 12 hours, other artifacts can then load
+  that artifact's files. Only a per-artifact origin would fully separate artifacts from
+  each other, and that is not supported.
 - A sibling subdomain content origin (`yeet-content.example.com` next to
   `yeet.example.com`) is same-site to browsers: SameSite=Lax account cookies are sent on
   its requests to the account origin, and Fetch Metadata reports them as `same-site`.
   Yeet relies on its own checks there: the `__Host-` session cookie, the Fetch Metadata
-  and Origin guards, and navigation-only grants. A separate registrable domain also gets
+  and Origin guards, and grants only for user-activated navigations. A separate registrable domain also gets
   the browser's site boundary and is stronger.
 - Grants are single-use, live for 60 seconds, and are bound to a session record and an
   artifact path. Used nonces are kept in memory only, so a restart forgets them; the

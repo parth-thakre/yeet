@@ -46,6 +46,8 @@ async function startServer(t, data, extra = () => ({})) {
   throw new Error(`server did not start: ${output}`);
 }
 const bearer = token => ({ Authorization: `Bearer ${token}` });
+// What a browser sends for a link click or typed URL; grants are minted only for these.
+const navigate = { 'Sec-Fetch-Mode': 'navigate', 'Sec-Fetch-Dest': 'document', 'Sec-Fetch-User': '?1' };
 const formPost = (body, headers = {}) => ({ method: 'POST', redirect: 'manual', headers: { 'Content-Type': 'application/x-www-form-urlencoded', ...headers }, body: new URLSearchParams(body).toString() });
 async function jsonRequest(origin, route, { headers = {}, method = 'GET', body, expected = 200 } = {}) {
   const init = { method, headers: { Accept: 'application/json', ...headers }, redirect: 'manual' };
@@ -101,7 +103,7 @@ test('security fixes from the auth review', async t => {
     await jsonRequest(origin, '/api/me', { headers: { Cookie: cookie }, expected: 401 });
     const other = await cookieFromLogin(origin, adminToken);
     assert.equal((await jsonRequest(origin, '/api/me', { headers: { Cookie: other } })).name, 'admin');
-    const logout = await fetch(`${origin}/logout`, { headers: { Cookie: other }, redirect: 'manual' });
+    const logout = await fetch(`${origin}/logout`, { method: 'POST', headers: { Cookie: other }, redirect: 'manual' });
     assert.equal(logout.status, 302);
     await jsonRequest(origin, '/api/me', { headers: { Cookie: other }, expected: 401 }, 'a replayed cookie is dead after logout');
   });
@@ -276,7 +278,7 @@ test('published pages are served from a separate content origin', async t => {
   assert.match(adminCookie, /^yeet_session=/);
   // Follows account -> grant -> content and returns the page cookie.
   async function contentCookie(cookie, id, route = `/a/${id}/`) {
-    const handoff = await account(route, { headers: { Cookie: cookie } });
+    const handoff = await account(route, { headers: { ...navigate, Cookie: cookie } });
     assert.equal(handoff.status, 302, handoff.body);
     assert.ok(handoff.headers.location.startsWith(`${content}/.yeet/grant?t=`), handoff.headers.location);
     const granted = await onContent(handoff.headers.location.slice(content.length));
@@ -357,7 +359,7 @@ test('published pages are served from a separate content origin', async t => {
 
   await t.test('grants are minted only for top-level navigations', async () => {
     const asked = headers => account(`/a/${privateId}/sub/`, { headers: { Cookie: adminCookie, ...headers } });
-    const navigation = await asked({ 'Sec-Fetch-Mode': 'navigate', 'Sec-Fetch-Dest': 'document', 'Sec-Fetch-Site': 'same-site' });
+    const navigation = await asked({ ...navigate, 'Sec-Fetch-Site': 'same-site' });
     assert.equal(navigation.status, 302);
     assert.ok(navigation.headers.location.startsWith(`${content}/.yeet/grant?t=`));
     const subresources = [
@@ -376,6 +378,51 @@ test('published pages are served from a separate content origin', async t => {
     assert.equal(image.headers.location, `${content}/a/${publicId}/`, 'public pages still redirect for subresources');
   });
 
+  await t.test('without a user-started navigation the account origin asks for a click instead', async () => {
+    const unproven = {
+      'script-started navigation (no ?1)': { 'Sec-Fetch-Mode': 'navigate', 'Sec-Fetch-Dest': 'document', 'Sec-Fetch-Site': 'same-site' },
+      'Sec-Purpose prefetch': { ...navigate, 'Sec-Purpose': 'prefetch' },
+      'legacy Purpose prefetch': { ...navigate, Purpose: 'prefetch' },
+      'no Fetch Metadata': {},
+      '?0': { ...navigate, 'Sec-Fetch-User': '?0' },
+      '?1 without mode and dest': { 'Sec-Fetch-User': '?1' },
+    };
+    for (const [name, headers] of Object.entries(unproven)) {
+      const response = await account(`/a/${workspaceId}/sub/?q=1`, { headers: { ...headers, Cookie: adminCookie } });
+      assert.equal(response.status, 200, name);
+      assert.equal(response.headers.location, undefined, name);
+      assert.equal(response.headers['set-cookie'], undefined, name);
+      assert.equal(response.headers['cache-control'], 'no-store', name);
+      assert.match(response.headers['content-security-policy'], /default-src 'none'.*form-action 'self'/, name);
+      assert.match(response.body, /<h1>Open this page<\/h1>/, name);
+      assert.ok(response.body.includes(`<form method="post" action="/a/${workspaceId}/sub/?q=1"><button type="submit">Open ${workspaceId}</button>`), name);
+    }
+    // The page name is escaped.
+    const named = await jsonRequest(local, '/api/artifacts', { method: 'POST', headers: bearer(adminToken), body: { visibility: 'workspace', name: '<b>"x"</b>' }, expected: 201 });
+    const shown = await account(`/a/${named.id}/`, { headers: { Cookie: adminCookie } });
+    assert.ok(shown.body.includes('Open &lt;b&gt;&quot;x&quot;&lt;/b&gt;</button>'), shown.body);
+    assert.doesNotMatch(shown.body, /<b>"x"/);
+    // Submitting the form from the account origin hands over through a working grant.
+    const post = (headers, route = `/a/${workspaceId}/sub/?q=1`) => account(route, { method: 'POST', headers: { Cookie: adminCookie, ...headers } });
+    const submitted = await post({ Origin: origin, 'Sec-Fetch-Site': 'same-origin', 'Content-Type': 'application/x-www-form-urlencoded' });
+    assert.equal(submitted.status, 303);
+    assert.ok(submitted.headers.location.startsWith(`${content}/.yeet/grant?t=`));
+    const granted = await onContent(submitted.headers.location.slice(content.length));
+    assert.equal(granted.headers.location, `/a/${workspaceId}/sub/?q=1`);
+    assert.equal((await onContent(granted.headers.location, { headers: { Cookie: granted.headers['set-cookie'][0].split(';')[0] } })).status, 200);
+    for (const headers of [{ Origin: content }, { 'Sec-Fetch-Site': 'same-site' }, { 'Sec-Fetch-Site': 'cross-site', Origin: 'https://evil.example' }]) {
+      const refused = await post(headers);
+      assert.equal(refused.status, 403, JSON.stringify(headers));
+      assert.equal(refused.headers.location, undefined);
+    }
+    assert.equal((await post({ Origin: origin }, `/a/${publicId}/`)).headers.location, `${content}/a/${publicId}/`, 'public pages hand over directly');
+    assert.match((await account(`/a/${workspaceId}/`, { method: 'POST', headers: { Origin: origin } })).headers.location, /^\/login\?next=/, 'signed out: sign in first');
+    const alicePrivate = await publish(local, aliceToken, 'private');
+    assert.equal((await post({ Origin: origin }, `/a/${alicePrivate}/`)).status, 404, 'unreadable stays 404');
+    assert.equal((await account(`/a/${workspaceId}/`, { method: 'POST', headers: bearer(adminToken) })).status, 404, 'bearer clients do not post');
+    assert.equal((await onContent(`/a/${publicId}/`, { method: 'POST' })).status, 404, 'no POST on the content host');
+  });
+
   await t.test('the grant target is canonical even when the request path was percent-encoded', async () => {
     const encodedId = `%${workspaceId.charCodeAt(0).toString(16)}${workspaceId.slice(1)}`;
     for (const [route, expected] of [[`/%61/${workspaceId}/sub/?q=1`, `/a/${workspaceId}/sub/?q=1`], [`/a/${encodedId}/sub/index%2Ehtml`, `/a/${workspaceId}/sub/index.html`], [`/a/${encodedId}`, `/a/${workspaceId}/`]]) {
@@ -387,7 +434,7 @@ test('published pages are served from a separate content origin', async t => {
   });
 
   await t.test('HEAD follows the whole handoff and spends the grant', async () => {
-    const handoff = await account(`/a/${privateId}/`, { method: 'HEAD', headers: { Cookie: adminCookie } });
+    const handoff = await account(`/a/${privateId}/`, { method: 'HEAD', headers: { ...navigate, Cookie: adminCookie } });
     assert.equal(handoff.status, 302);
     const grant = handoff.headers.location.slice(content.length);
     const granted = await onContent(grant, { method: 'HEAD' });
@@ -485,10 +532,25 @@ test('published pages are served from a separate content origin', async t => {
     const browser = await login(adminToken);
     const { cookie } = await contentCookie(browser, privateId);
     assert.equal((await onContent(`/a/${privateId}/`, { headers: { Cookie: cookie } })).status, 200);
-    // GET /logout is guarded like a form post, so a sibling origin cannot sign viewers out with an <img>.
-    for (const site of ['same-site', 'cross-site']) assert.equal((await account('/logout', { headers: { Cookie: browser, 'Sec-Fetch-Site': site } })).status, 403, site);
-    assert.equal((await account('/logout', { headers: { Cookie: browser, Origin: content } })).status, 403);
+    // A GET /logout from anywhere but this origin or the address bar only asks, so a sibling origin cannot
+    // sign viewers out with an <img>.
+    for (const site of ['same-site', 'cross-site']) {
+      const asked = await account('/logout', { headers: { Cookie: browser, 'Sec-Fetch-Site': site } });
+      assert.equal(asked.status, 200, site);
+      assert.equal(asked.headers['set-cookie'], undefined, site);
+    }
+    assert.equal((await account('/logout', { headers: { Cookie: browser, Origin: content, 'Sec-Fetch-Site': 'same-origin' } })).status, 403);
+    const confirm = await account('/logout', { headers: { Cookie: browser } });
+    assert.equal(confirm.status, 200, 'no Fetch Metadata: confirm instead of logging out');
+    assert.equal(confirm.headers['set-cookie'], undefined);
+    assert.match(confirm.body, /<form method="post" action="\/logout"><button type="submit">Log out<\/button><\/form>/);
+    assert.equal((await account('/logout', { method: 'POST', headers: { Cookie: browser, Origin: content } })).status, 403, 'a POST from the content origin is refused');
     assert.equal((await onContent(`/a/${privateId}/`, { headers: { Cookie: cookie } })).status, 200, 'still signed in');
+    const other = await login(adminToken);
+    const posted = await account('/logout', { method: 'POST', headers: { Cookie: other, Origin: origin } });
+    assert.equal(posted.status, 302);
+    assert.match(posted.headers['set-cookie'][0], /^yeet_session=; .*Max-Age=0/);
+    await api('/api/me', { headers: { Cookie: other }, expected: 401 });
     assert.equal((await account('/logout', { headers: { Cookie: browser, 'Sec-Fetch-Site': 'same-origin' } })).status, 302);
     const loggedOut = await onContent(`/a/${privateId}/`, { headers: { Cookie: cookie } });
     assert.equal(loggedOut.status, 302);
@@ -505,7 +567,7 @@ test('published pages are served from a separate content origin', async t => {
     assert.equal((await onContent(`/a/${shared}/`, { headers: { Cookie: ownerCookie } })).status, 200, 'the owner keeps access');
     await api(`/api/artifacts/${shared}`, { method: 'PATCH', headers: bearer(adminToken), body: { visibility: 'workspace' } });
     assert.equal((await onContent(`/a/${shared}/`, { headers: { Cookie: aliceCookie } })).status, 200);
-    const pending = await account(`/a/${shared}/`, { headers: { Cookie: alice } });
+    const pending = await account(`/a/${shared}/`, { headers: { ...navigate, Cookie: alice } });
     await api('/api/members/alice', { method: 'DELETE', headers: bearer(adminToken) });
     assert.equal((await onContent(`/a/${shared}/`, { headers: { Cookie: aliceCookie } })).status, 302, 'removed member is out');
     assert.equal((await onContent(pending.headers.location.slice(content.length))).status, 403, 'an unspent grant dies with the member');
@@ -553,10 +615,10 @@ test('secure cookies use the __Host- session name and the page cookie is Secure'
   assert.equal((await me(`__Host-yeet_session=${value}`)).status, 200);
   assert.equal((await me(`yeet_session=${value}`)).status, 401, 'the unprefixed name a sibling could toss in is ignored');
   const id = await publish(`http://127.0.0.1:${port}`, adminToken, 'workspace');
-  const handoff = await hit(port, accountHost, `/a/${id}/`, { headers: { Cookie: `__Host-yeet_session=${value}` } });
+  const handoff = await hit(port, accountHost, `/a/${id}/`, { headers: { ...navigate, Cookie: `__Host-yeet_session=${value}` } });
   const granted = await hit(port, contentHost, handoff.headers.location.slice(`http://${contentHost}`.length));
   assert.match(granted.headers['set-cookie'][0], /^yeet_content=[^;]+; Path=\/a\/[^/]+\/; HttpOnly; SameSite=Lax; Max-Age=43200; Secure$/);
-  const logout = await hit(port, accountHost, '/logout', { headers: { Cookie: `__Host-yeet_session=${value}` } });
+  const logout = await hit(port, accountHost, '/logout', { headers: { 'Sec-Fetch-Site': 'same-origin', Cookie: `__Host-yeet_session=${value}` } });
   assert.match(logout.headers['set-cookie'][0], /^__Host-yeet_session=; Path=\/; HttpOnly; SameSite=Lax; Max-Age=0; Secure$/);
   assert.equal((await me(`__Host-yeet_session=${value}`)).status, 401);
 });

@@ -15,12 +15,14 @@ you deployed it, and the steps that reproduce the problem.
 - Without `YEET_CONTENT_ORIGIN`, pages run on the same origin as account pages, and
   any member can act as anyone who opens their page. Don't run that way with
   publishers you don't trust.
-- Every published page shares the one content origin. A hostile page can load files
-  from other pages the viewer opened in the last 12 hours, while each page's access
-  cookie lasts. It can also read browser storage, such as `localStorage`, that any
-  published page saved. Yeet only issues that cookie when the viewer opens a page, so pages the
-  viewer hasn't opened stay out of reach. Keeping pages apart from each other would
-  need an origin per page, which Yeet doesn't support.
+- Every published page shares the one content origin. A hostile page can read
+  browser storage, such as `localStorage`, that any published page saved.
+- Background requests, prefetches, and script-started navigations can't start the
+  handoff that opens a private page on the content origin. A hostile page can still
+  get the viewer to open another page with a click, through a link or a popup. For
+  the next 12 hours, other published pages can then load that page's files.
+- Only a separate origin per page would fully isolate pages from each other, and
+  Yeet doesn't support that.
 - Browsers treat a sibling subdomain, such as `yeet-content.example.com` next to
   `yeet.example.com`, as the same site. Account cookies then go along with requests
   from published pages, and Yeet relies on its own checks to refuse them. A separate

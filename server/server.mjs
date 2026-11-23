@@ -2,19 +2,19 @@ import http from 'node:http';
 import path from 'node:path';
 import { pathToFileURL, fileURLToPath } from 'node:url';
 import { performance } from 'node:perf_hooks';
-import { authStore, readable } from './auth.mjs';
+import { authStore, csrfGuard, readable } from './auth.mjs';
 import { artifactStore } from './artifacts.mjs';
 import { api } from './api.mjs';
-import { browser } from './pages.mjs';
+import { browser, openPage } from './pages.mjs';
 import { contentStore } from './content.mjs';
 import { artifactHeaders, serveFile } from './serve.mjs';
 import { fail, json, redirect, safeFile, validPath } from './store.mjs';
 
 // Serves /a/<id>/... on whichever origin finally answers. allow(meta, relative) decides access: true when it
 // has already answered (a redirect), else optionally { cache } to override Cache-Control. The normalization
-// redirects run where the page is served.
-async function artifact(req, res, pathname, query, artifacts, allow) {
-  if (!pathname.startsWith('/a/') || !['GET', 'HEAD'].includes(req.method)) return false;
+// redirects run where the page is served. Only the account origin in split mode also takes POST.
+async function artifact(req, res, pathname, query, artifacts, allow, methods = ['GET', 'HEAD']) {
+  if (!pathname.startsWith('/a/') || !methods.includes(req.method)) return false;
   const match = /^\/a\/([A-Za-z0-9_-]{12})(?:\/(.*))?$/.exec(pathname);
   if (!match) fail(404, 'Not found');
   const [, id, relative] = match;
@@ -44,7 +44,9 @@ async function artifact(req, res, pathname, query, artifacts, allow) {
 }
 // Account origin: today's readability rules. With a content origin, verified bearer clients are still
 // served here, but browsers are sent on: public pages directly, others through a one-time grant.
-const accountAccess = (req, res, member, content) => async (value, relative) => {
+const accountAccess = (req, res, member, content, auth) => async (value, relative) => {
+  const post = req.method === 'POST';
+  if (post) csrfGuard(req, auth.origin()); // the "Open this page" form; it has no fields to read
   if (!readable(value, member)) {
     if (!member) {
       if (req.headers.authorization !== undefined || /application\/json/i.test(req.headers.accept || '')) fail(401, 'Authentication required');
@@ -55,16 +57,26 @@ const accountAccess = (req, res, member, content) => async (value, relative) => 
   if (!content) return false;
   // identify() reads only Authorization when it is present, so a member here came from a Bearer token.
   // A shared cache must never replay those bytes to a browser.
-  if (member && req.headers.authorization !== undefined) return { cache: 'private, no-store' };
+  if (member && req.headers.authorization !== undefined) {
+    if (post) fail(404, 'Not found');
+    return { cache: 'private, no-store' };
+  }
   // Canonical target: the page cookie is scoped to /a/<id>/, so hand over the slash form, re-encoded.
   const search = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
   const target = `/a/${value.id}/${(relative || '').split('/').map(encodeURIComponent).join('/')}${search}`;
-  if (value.visibility === 'public') { redirect(res, content.origin + target); return true; }
-  // Mint grants only for top-level navigations. A subresource (an <img> or <script> on another page of the
-  // same site) would otherwise plant this page's cookie for a page that can then read it.
-  const mode = req.headers['sec-fetch-mode'], dest = req.headers['sec-fetch-dest'];
-  if ((mode !== undefined && mode !== 'navigate') || (dest !== undefined && dest !== 'document')) fail(404, 'Not found');
-  redirect(res, `${content.origin}/.yeet/grant?t=${await content.grant(req, value.id, target)}`);
+  if (value.visibility === 'public') { redirect(res, content.origin + target, post ? 303 : 302); return true; }
+  // Mint grants only for a navigation the user started: a link click, typed URL or form submit. A
+  // subresource, prefetch or script-started navigation from another page of the same site would
+  // otherwise plant this page's cookie where that page can read it. Without that evidence (including
+  // browsers that send no Fetch Metadata), ask for a click on a same-origin form instead.
+  const { 'sec-fetch-mode': mode, 'sec-fetch-dest': dest } = req.headers;
+  if (!post) {
+    if ((mode !== undefined && mode !== 'navigate') || (dest !== undefined && dest !== 'document')) fail(404, 'Not found');
+    const activated = mode === 'navigate' && dest === 'document' && req.headers['sec-fetch-user'] === '?1'
+      && req.headers['sec-purpose'] === undefined && req.headers.purpose === undefined;
+    if (!activated) { openPage(res, value.name || value.id, target); return true; }
+  }
+  redirect(res, `${content.origin}/.yeet/grant?t=${await content.grant(req, value.id, target)}`, post ? 303 : 302);
   return true;
 };
 function originFrom(value, name) {
@@ -126,7 +138,7 @@ export async function createServer(env = process.env) {
       const member = await auth.identify(req);
       if (await api(req, res, pathname, query, member, auth, artifacts)) return;
       if (await browser(req, res, pathname, query, member, auth, artifacts)) return;
-      if (await artifact(req, res, pathname, query, artifacts, accountAccess(req, res, member, content))) return;
+      if (await artifact(req, res, pathname, query, artifacts, accountAccess(req, res, member, content, auth), content ? ['GET', 'HEAD', 'POST'] : undefined)) return;
       fail(404, 'Not found');
     } catch (error) {
       req.resume();

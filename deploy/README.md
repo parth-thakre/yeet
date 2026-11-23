@@ -156,6 +156,8 @@ Yeet serves published pages from `YEET_CONTENT_ORIGIN`, a second hostname with n
 account access. Both hostnames point at the same Yeet port. Yeet picks the account
 site or the content site from the `Host` header, so the tunnel or proxy must pass
 `Host` through unchanged. Cloudflare Tunnel and Caddy do this by default.
+It must also pass the browser's `Sec-Fetch-*` and `Origin` headers through unchanged.
+Without them, private pages ask for an extra click before they open.
 
 1. Pick the hostname. A separate registrable domain, such as `yeet-content.net` next
    to `yeet.example.com`, is best where you can get one. A sibling subdomain such as
