@@ -41,8 +41,8 @@ node:path, node:stream, etc.). Dev dependencies are also disallowed; tests use n
   Validated like `YEET_ORIGIN`: http or https, no path or credentials, trailing slashes
   trimmed. Startup fails if it is set while `YEET_ORIGIN` is unset, if it equals
   `YEET_ORIGIN`, if its hostname equals the `YEET_ORIGIN` hostname, or if `YEET_ORIGIN` is
-  https and it is not. Unset (Compose
-  passes an empty value) keeps the legacy single-origin mode, where artifacts are served
+  https and it is not, or if its host is an IPv6 literal (CSP `form-action` can't name
+  one). Unset (Compose passes an empty value) keeps the legacy single-origin mode, where artifacts are served
   on `YEET_ORIGIN` as before, and prints a startup warning that published scripts share
   the account origin. A separate registrable domain is preferred. A sibling subdomain works,
   but browsers treat it as the same site as `YEET_ORIGIN`.
@@ -297,7 +297,8 @@ With `YEET_CONTENT_ORIGIN` set, `GET /a/<id>[/...]` on the account origin works 
   through the redirects. `POST /a/<id>/...` requires the same-origin guard used by
   account forms and an `Origin` header equal to `YEET_ORIGIN`, then runs the same
   readability checks and returns 303 to the grant for the canonical target (or, for a
-  public artifact, to the content origin). A Bearer `POST` gets 404.
+  public artifact, to the content origin). A Bearer `POST` is refused
+  (403 without a matching `Origin`, otherwise 404).
 - Workspace or private artifact, subresource request (`Sec-Fetch-Mode` present and not
   `navigate`, or `Sec-Fetch-Dest` present and not `document`, such as an `<img>`,
   `<script>`, or `fetch` from another page): 404. No page can plant another page's
@@ -494,8 +495,9 @@ a shell.
   cannot start a handoff. User activation lasts a few seconds after any interaction,
   though, and a script navigation in that window counts as user-started. So any click
   or keypress on a hostile artifact lets it open another artifact the viewer can read.
-  For the next 12 hours, other artifacts can then load that artifact's files. Only a per-artifact origin would fully separate artifacts from
-  each other, and that is not supported.
+  For the next 12 hours, other artifacts can then load that artifact's files. Only a
+  per-artifact origin would fully separate artifacts from each other, and that is not
+  supported.
 - A sibling subdomain content origin (`yeet-content.example.com` next to
   `yeet.example.com`) is same-site to browsers: SameSite=Lax account cookies are sent on
   its requests to the account origin, and Fetch Metadata reports them as `same-site`.

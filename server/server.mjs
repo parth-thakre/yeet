@@ -99,6 +99,8 @@ export async function createServer(env = process.env) {
     // Requests are routed by Host header, so the two origins need different hostnames, not just ports.
     const contentUrl = originFrom(config.contentOrigin, 'YEET_CONTENT_ORIGIN');
     if (contentUrl.hostname === origin.hostname) throw new Error('YEET_CONTENT_ORIGIN must use a different hostname from YEET_ORIGIN');
+    // CSP source expressions can't name an IPv6 literal, so form-action could not allow it.
+    if (contentUrl.hostname.startsWith('[')) throw new Error('YEET_CONTENT_ORIGIN must use a hostname or IPv4 address, not an IPv6 literal');
     if (origin.protocol === 'https:' && contentUrl.protocol !== 'https:') throw new Error('YEET_CONTENT_ORIGIN must use https when YEET_ORIGIN does');
   }
   const auth = await authStore(config);

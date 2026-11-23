@@ -157,7 +157,9 @@ account access. Both hostnames point at the same Yeet port. Yeet picks the accou
 site or the content site from the `Host` header, so the tunnel or proxy must pass
 `Host` through unchanged. Cloudflare Tunnel and Caddy do this by default.
 It must also pass the browser's `Sec-Fetch-*` and `Origin` headers through unchanged.
-Without them, private pages ask for an extra click before they open.
+Without `Sec-Fetch-*`, private pages ask for an extra click before they open. Without
+`Origin`, that click and the sign-out confirmation are refused, so private pages can't
+be opened in a browser.
 
 1. Pick the hostname. A separate registrable domain, such as `yeet-content.net` next
    to `yeet.example.com`, is best where you can get one. A sibling subdomain such as
@@ -168,6 +170,8 @@ Without them, private pages ask for an extra click before they open.
 3. Route it in your tunnel or proxy to the same `yeet:3000` or `127.0.0.1:3000`
    service as the main hostname. The Cloudflare and Caddy examples below include it.
 4. Set `YEET_CONTENT_ORIGIN=https://<that hostname>` in `.env` and run `docker compose up -d`.
+   With Cloudflare Tunnel, also restart the connector so it reads the new ingress rule:
+   `docker compose --profile cloudflare up -d --force-recreate cloudflared`.
 
 Yeet refuses to start if the content hostname matches the `YEET_ORIGIN` hostname.
 Without `YEET_CONTENT_ORIGIN`, published pages run on the account origin and the
