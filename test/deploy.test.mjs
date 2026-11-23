@@ -133,6 +133,14 @@ test('the tunnel helper routes a content hostname in another zone of the same ac
   assert.deepEqual(created, ['yeet.example.com', 'yeet.example-content.net']);
 });
 
+test('the tunnel helper refuses a CF_ACCOUNT_ID that differs from the zone account before changing anything', posixWithJq, async t => {
+  const { work, created, docker, error } = await runTunnelHelper(t, { CF_ACCOUNT_ID: 'other' }, 'YEET_ORIGIN=https://old.example\n', { fails: true });
+  assert.match(error.stderr, /zone example\.com is in Cloudflare account account, but CF_ACCOUNT_ID is other/);
+  assert.deepEqual(created, []);
+  assert.deepEqual(docker, []);
+  assert.equal(await readFile(path.join(work, '.env'), 'utf8'), 'YEET_ORIGIN=https://old.example\n');
+});
+
 test('the tunnel helper refuses a content zone in another Cloudflare account before changing anything', posixWithJq, async t => {
   const { work, created, docker, error } = await runTunnelHelper(t, { CONTENT_HOSTNAME: 'yeet.other-account.net' },
     'YEET_ORIGIN=https://old.example\n', { fails: true });

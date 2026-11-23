@@ -69,6 +69,9 @@ zone="$(jq -r '.result[0].id // empty' <<<"$zone_json")"
 # Account-owned tokens cannot list /accounts, so take the account from the zone.
 acct="${CF_ACCOUNT_ID:-$(jq -r '.result[0].account.id // empty' <<<"$zone_json")}"
 [ -n "$acct" ] || fail "could not determine the account id; set CF_ACCOUNT_ID"
+# A tunnel can only serve hostnames from zones in its own account, so an override must agree.
+zone_acct="$(jq -r '.result[0].account.id // empty' <<<"$zone_json")"
+[ -z "$zone_acct" ] || [ "$zone_acct" = "$acct" ] || fail "zone $ZONE_NAME is in Cloudflare account $zone_acct, but CF_ACCOUNT_ID is $acct; the tunnel must be in the zone's account"
 
 # Check a content hostname in another zone before changing anything. Its CNAME can only route
 # through this tunnel when that zone is in the tunnel's Cloudflare account.
